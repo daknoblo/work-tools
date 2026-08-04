@@ -3,8 +3,15 @@ services:
     image: ghcr.io/daknoblo/azure-diagram-builder:latest
     container_name: azure-diagram-builder
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      # Base URL only - the server appends `openai/v1/responses` itself.
+      AZURE_OPENAI_ENDPOINT: https://YOUR-RESOURCE.services.ai.azure.com/
+      # No managed identity outside Azure, so a key is required.
+      AZURE_OPENAI_API_KEY: CHANGE_ME
+      # Without a token /mcp is completely unauthenticated.
+      MCP_AUTH_TOKEN: CHANGE_ME
+      # Would let the server identity enumerate a live resource group.
+      AZURE_IMPORT_ENABLED: "false"
     # Loopback only: the app has no authentication of its own, so TLS and auth
     # belong in the reverse proxy in front of it.
     ports:

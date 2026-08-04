@@ -21,8 +21,8 @@ bundle. That splits configuration in two:
   supplied by a GitHub repository **variable**, not a secret. Changing them
   requires a rebuild.
 - **Runtime** — the Azure OpenAI endpoint and API key, the MCP token, and other
-  server-side settings. These stay on the VPS in `.env` and are never baked
-  into the image.
+  server-side settings. These live in the `environment:` block of the compose
+  unit on the VPS and are never baked into the image.
 
 ## 1. Configure the build
 
@@ -32,15 +32,22 @@ per line. Only keys that map to a real deployment in your Azure OpenAI resource
 should be listed — every entry becomes a selectable model in the UI.
 
 ```dotenv
-VITE_AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
-VITE_AZURE_OPENAI_DEPLOYMENT_GPT51=gpt-5.1
-VITE_AZURE_OPENAI_DEPLOYMENT_GPT54=gpt-5.4
-VITE_AZURE_OPENAI_DEPLOYMENT_GPT54MINI=gpt-5.4-mini
+VITE_AZURE_OPENAI_ENDPOINT=https://your-resource.services.ai.azure.com/
+VITE_AZURE_OPENAI_DEPLOYMENT_GPT56SOL=gpt-5.6-sol
+VITE_AZURE_OPENAI_DEPLOYMENT_GPT56LUNA=gpt-5.6-luna
 ```
 
-`VITE_AZURE_OPENAI_ENDPOINT` is only a flag telling the UI that AI is
-configured; the real call is proxied server-side. The full list of supported
-keys is in the upstream [`.env.example`](https://github.com/Arturo-Quiroga-MSFT/azure-architecture-diagram-builder/blob/main/.env.example).
+The endpoint is the **base URL only** — the server appends `openai/v1/responses`
+(or `openai/deployments/<name>/chat/completions`) itself.
+
+The keys are matched literally and are case-sensitive, so
+`..._GPT56sol` silently yields a model that never shows up. The full list is in
+the upstream [`.env.example`](https://github.com/Arturo-Quiroga-MSFT/azure-architecture-diagram-builder/blob/main/.env.example).
+
+The app defaults to **GPT-5.6 Luna**. If you do not configure that deployment,
+the first generation fails with *"No deployment configured for GPT-5.6 Luna"*
+until you pick an available model in the toolbar — so either configure Luna or
+expect to switch models once.
 
 The pipeline rejects values containing whitespace, because the upstream
 `Dockerfile` sources this file through `xargs`.
@@ -123,11 +130,14 @@ the first push.
 
 ```bash
 mkdir -p /opt/azure-diagram-builder && cd /opt/azure-diagram-builder
-curl -O https://raw.githubusercontent.com/<owner>/work-tools/main/tools/azure-diagram-builder/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/<owner>/work-tools/main/tools/azure-diagram-builder/.env.example
-# edit .env, then:
+curl -O https://raw.githubusercontent.com/daknoblo/work-tools/main/tools/azure-diagram-builder/docker-compose.yml
+# fill in the environment: block, then:
 docker compose up -d
 ```
+
+The committed file carries placeholders because this repository is public. Fill
+in `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` and `MCP_AUTH_TOKEN` on the
+VPS only, and keep that copy out of git.
 
 The compose unit joins the external `docker_global` network and publishes
 `127.0.0.1:8088` only. Put a reverse proxy in front of it for TLS **and
@@ -153,7 +163,7 @@ nginx needs `proxy_read_timeout 300s;` and `client_max_body_size 12m;` —
 reasoning models take minutes and image import posts base64 payloads.
 
 If you do not use the MCP server, block `/mcp` in the proxy. Otherwise set
-`MCP_AUTH_TOKEN` in `.env`; without it the endpoint is unauthenticated.
+`MCP_AUTH_TOKEN`; without it the endpoint is unauthenticated.
 
 ## 4. Update
 

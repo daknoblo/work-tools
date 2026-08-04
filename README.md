@@ -15,7 +15,6 @@ they can be run on my VPS with docker compose.
 ```
 .github/workflows/tool-<name>.yml   one build pipeline per tool
 tools/<name>/docker-compose.yml     deployment unit for the VPS
-tools/<name>/.env.example           runtime configuration template
 tools/<name>/README.md              build, deploy and update instructions
 ```
 
@@ -42,8 +41,8 @@ Every pipeline follows the same shape:
 1. Copy `.github/workflows/tool-azure-diagram-builder.yml` and adjust
    `UPSTREAM_REPOSITORY`, `IMAGE_NAME`, the build context, and the build-time
    configuration step.
-2. Add `tools/<name>/` with `docker-compose.yml`, `.env.example`, and a
-   `README.md` covering configuration, deployment, and updates.
+2. Add `tools/<name>/` with `docker-compose.yml` and a `README.md` covering
+   configuration, deployment, and updates.
 3. Add the tool to the table above.
 
 ## Updating a deployment
