@@ -1,6 +1,6 @@
 services:
   azure-diagram-builder:
-    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER in .env}/azure-diagram-builder:${IMAGE_TAG:-latest}
+    image: ghcr.io/daknoblo/azure-diagram-builder:${IMAGE_TAG:-latest}
     container_name: azure-diagram-builder
     restart: unless-stopped
     env_file:
