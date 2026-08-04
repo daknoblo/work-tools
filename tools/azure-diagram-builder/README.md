@@ -165,7 +165,78 @@ reasoning models take minutes and image import posts base64 payloads.
 If you do not use the MCP server, block `/mcp` in the proxy. Otherwise set
 `MCP_AUTH_TOKEN`; without it the endpoint is unauthenticated.
 
-## 4. Update
+## 4. MCP server behind Cloudflare Access
+
+Two independent layers guard `/mcp`, and they do not collide because each uses
+its own headers:
+
+| Layer | Header | Checked by |
+| --- | --- | --- |
+| Cloudflare Access | `CF-Access-Client-Id` + `CF-Access-Client-Secret` | Cloudflare edge |
+| MCP server | `Authorization: Bearer <MCP_AUTH_TOKEN>` | the container |
+
+Cloudflare side:
+
+1. Create a service token under *Zero Trust → Access controls → Service
+   credentials → Service Tokens* and copy the client secret (shown once).
+2. Add a self-hosted Access application scoped to the `/mcp` path of your
+   hostname, separate from the application protecting the UI.
+3. Give it a policy with action **Service Auth** and include that service token.
+   Any other action makes Access redirect to an identity-provider login, which
+   an MCP client cannot complete.
+
+Verify end to end:
+
+```bash
+curl -sS https://diagrams.example.com/mcp \
+  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+An HTML login page means the Access policy is not *Service Auth*. A JSON error
+with code `-32001` means Access passed but the bearer token is wrong.
+
+VS Code (`.vscode/mcp.json`), with every secret prompted instead of committed:
+
+```json
+{
+  "servers": {
+    "azure-diagram-builder": {
+      "type": "http",
+      "url": "https://diagrams.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:mcp-token}",
+        "CF-Access-Client-Id": "${input:cf-id}",
+        "CF-Access-Client-Secret": "${input:cf-secret}"
+      }
+    }
+  },
+  "inputs": [
+    { "id": "mcp-token", "type": "promptString", "description": "MCP bearer token", "password": true },
+    { "id": "cf-id", "type": "promptString", "description": "CF Access Client Id" },
+    { "id": "cf-secret", "type": "promptString", "description": "CF Access Client Secret", "password": true }
+  ]
+}
+```
+
+Do **not** enable Cloudflare's single-header mode
+(`read_service_tokens_from_header: "Authorization"`) on this application. It
+makes Access consume the `Authorization` header, which is exactly the header the
+MCP server needs, and the two cannot share it.
+
+An application with only Service Auth policies issues no reusable
+`CF_Authorization` cookie, so the service token must travel on every request.
+MCP clients send their configured headers on every call, so this is not a
+problem in practice.
+
+`GET /mcp/healthz` is exempt from the bearer check inside the container, but
+still sits behind Access — a probe needs the service token headers alone.
+
+## 5. Update
 
 ```bash
 cd /opt/azure-diagram-builder
