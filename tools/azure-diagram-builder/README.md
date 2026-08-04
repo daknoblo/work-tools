@@ -81,9 +81,30 @@ provenance attestation:
 gh attestation verify oci://ghcr.io/<owner>/azure-diagram-builder:latest --owner <owner>
 ```
 
-First run only: after the initial push, open the package in GitHub → *Package
-settings* and either keep it private (then `docker login ghcr.io` on the VPS
-with a PAT that has `read:packages`) or make it public.
+### Package visibility
+
+New GHCR packages start out private. GHCR storage and transfer are currently
+free either way, so this is a question of exposure, not cost.
+
+No credential is baked into the image: `AZURE_OPENAI_API_KEY` and
+`MCP_AUTH_TOKEN` are supplied at runtime on the VPS. What *is* baked in is every
+`VITE_*` value from `AADB_BUILD_ENV`, because Vite compiles them into the
+browser bundle:
+
+| Value | Exposure if the package is public |
+| --- | --- |
+| `VITE_AZURE_OPENAI_ENDPOINT` | Reveals the resource name; useless without a key |
+| Deployment names | Harmless |
+| `VITE_AZURE_AD_CLIENT_ID` | Public by design for SPAs |
+| `VITE_APPINSIGHTS_CONNECTION_STRING` | Contains an ingestion key — anyone could write telemetry into your App Insights |
+
+**Public** is the simpler choice and removes the need for `docker login` on the
+VPS. Keep the package **private** if you put an App Insights connection string
+into `AADB_BUILD_ENV`; the VPS then needs `docker login ghcr.io` with a PAT that
+has `read:packages`.
+
+Set this once under *Packages → azure-diagram-builder → Package settings* after
+the first push.
 
 ## 3. Run it on the VPS
 
