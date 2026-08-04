@@ -75,12 +75,16 @@ jobs:
           PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
         run: |
           upstream_sha="$(git -C upstream rev-parse HEAD)"
+          # Upstream rarely cuts releases, so package.json is the version source
+          # that is guaranteed to exist for whatever ref is being built.
+          version="$(jq -r '.version // ""' upstream/package.json)"
+          version="${version#v}"
           # The smoke test needs to run the image, which only works when building
           # a single image for the runner's own architecture.
           if [ "${PLATFORMS}" = "linux/amd64" ]; then smoke=true; else smoke=false; fi
           {
             echo "upstream_sha=${upstream_sha}"
-            echo "upstream_short_sha=${upstream_sha:0:7}"
+            echo "version=${version}"
             echo "registry_owner=${GITHUB_REPOSITORY_OWNER,,}"
             echo "platforms=${PLATFORMS}"
             echo "smoke=${smoke}"
@@ -93,15 +97,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Skip scheduled rebuild if upstream commit is already published
+      # The published image records the upstream commit it was built from in its
+      # standard OCI revision label, so no extra registry tag is needed to tell
+      # whether a scheduled rebuild would produce anything new.
+      - name: Skip scheduled rebuild if upstream has not changed
         id: published
         if: github.event_name == 'schedule'
         env:
-          IMAGE_REF: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}:upstream-${{ steps.context.outputs.upstream_short_sha }}
+          IMAGE_REF: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}:latest
+          UPSTREAM_SHA: ${{ steps.context.outputs.upstream_sha }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE_REF" > /dev/null 2>&1; then
+          published_sha="$(
+            docker buildx imagetools inspect "$IMAGE_REF" --format '{{ json .Image }}' 2>/dev/null \
+              | jq -r '[.. | objects | select(has("config")) | .config.Labels // empty
+                        | ."org.opencontainers.image.revision" // empty] | first // ""'
+          )" || published_sha=""
+
+          if [ -n "$published_sha" ] && [ "$published_sha" = "$UPSTREAM_SHA" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::${IMAGE_REF} already exists - nothing to rebuild."
+            echo "::notice::Published image already matches upstream ${UPSTREAM_SHA} - nothing to rebuild."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -190,14 +204,14 @@ jobs:
           images: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=raw,value=upstream-${{ steps.context.outputs.upstream_short_sha }}
-            type=raw,value={{date 'YYYYMMDD'}}-${{ steps.context.outputs.upstream_short_sha }}
+            type=raw,value=${{ steps.context.outputs.version }},enable=${{ steps.context.outputs.version != '' }}
             type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
           labels: |
             org.opencontainers.image.title=Azure Architecture Diagram Builder
             org.opencontainers.image.description=Self-hosted build of the Azure Architecture Diagram Builder
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.url=https://github.com/${{ env.UPSTREAM_REPOSITORY }}
+            org.opencontainers.image.version=${{ steps.context.outputs.version }}
             org.opencontainers.image.revision=${{ steps.context.outputs.upstream_sha }}
             org.opencontainers.image.licenses=MIT
             io.workflow.upstream.repository=${{ env.UPSTREAM_REPOSITORY }}
@@ -234,18 +248,18 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
           UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
-          UPSTREAM_SHA: ${{ steps.context.outputs.upstream_sha }}
+          VERSION: ${{ steps.context.outputs.version }}
         run: |
           {
             echo "## azure-diagram-builder"
             echo
             if [ "$SKIPPED" = "true" ]; then
-              echo "Upstream commit already published - build skipped."
+              echo "Upstream unchanged - build skipped."
             else
               echo "| Field | Value |"
               echo "| --- | --- |"
               echo "| Upstream ref | \`${UPSTREAM_REF}\` |"
-              echo "| Upstream commit | \`${UPSTREAM_SHA}\` |"
+              echo "| Version | \`${VERSION:-unknown}\` |"
               echo "| Digest | \`${DIGEST:-n/a}\` |"
               echo
               echo "Tags:"

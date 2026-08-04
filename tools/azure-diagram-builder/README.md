@@ -55,7 +55,8 @@ The workflow runs:
   optional inputs for the upstream ref (branch, tag or commit), an extra image
   tag, target platforms, and a build-only dry run;
 - **weekly** (Mondays, 04:17 UTC) — rebuilds only when upstream `main` moved,
-  by checking whether the `upstream-<sha>` tag already exists;
+  by comparing the commit recorded in the published image's
+  `org.opencontainers.image.revision` label against upstream `HEAD`;
 - **on push** to `main` when this tool's files or its workflow change.
 
 Every run first builds the image locally and smoke-tests it — nginx must serve
@@ -69,10 +70,22 @@ Every successful run publishes:
 
 | Tag | Purpose |
 | --- | --- |
-| `latest` | Rolling tag for the VPS |
-| `upstream-<sha>` | Exact upstream commit — use it to pin or roll back |
-| `<YYYYMMDD>-<sha>` | Chronological history |
+| `latest` | Rolling tag — what the VPS pulls |
+| `<version>` | Upstream version, read from its `package.json` (currently `1.0.0`) |
 | custom | Whatever you passed as `image_tag` |
+
+The version is not invented here, it is whatever the built ref declares. Upstream
+ships from `main` and cuts releases rarely, so `<version>` only moves when they
+bump `package.json` — until then a rebuild re-points the same version tag at the
+newer build, exactly like `latest`. Build a release tag
+(`upstream_ref: v1.0.0`) if you need a fixed point.
+
+The exact source commit of any image is in its labels rather than in a tag:
+
+```bash
+docker buildx imagetools inspect ghcr.io/<owner>/azure-diagram-builder:latest \
+  --format '{{ json .Image }}' | grep -E 'image\.(version|revision)'
+```
 
 Images are pushed with an SBOM, `provenance=max`, and a signed build
 provenance attestation:
@@ -147,8 +160,8 @@ docker compose up -d
 docker image prune -f
 ```
 
-To move to a specific build instead of `latest`, set `IMAGE_TAG=upstream-<sha>`
-in `.env` and repeat. The same works for rolling back.
+To move to a specific build instead of `latest`, set `IMAGE_TAG=<version>` in
+`.env` and repeat.
 
 To pick up an upstream change immediately, run the workflow manually instead of
 waiting for the weekly schedule.

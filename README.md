@@ -31,8 +31,8 @@ Every pipeline follows the same shape:
   `schedule`, and pushes that touch the tool's own files;
 - builds from an upstream checkout when the tool is third-party, so no foreign
   source is vendored here;
-- publishes `latest` plus an immutable tag identifying the exact source commit,
-  so a deployment can be pinned and rolled back;
+- publishes `latest` plus the version the upstream project declares, so nothing
+  is invented here;
 - pushes with SBOM, provenance, and a build provenance attestation;
 - keeps build-time configuration in repository **variables** and runtime secrets
   out of the image entirely.
