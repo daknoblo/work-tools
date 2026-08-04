@@ -3,6 +3,8 @@ services:
     image: ghcr.io/daknoblo/azure-diagram-builder:latest
     container_name: azure-diagram-builder
     restart: unless-stopped
+    # Tracking a rolling tag, so never reuse a stale local copy of it.
+    pull_policy: always
     environment:
       # Base URL only - the server appends `openai/v1/responses` itself.
       AZURE_OPENAI_ENDPOINT: https://YOUR-RESOURCE.services.ai.azure.com/
