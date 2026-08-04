@@ -129,10 +129,14 @@ curl -o .env https://raw.githubusercontent.com/<owner>/work-tools/main/tools/azu
 docker compose up -d
 ```
 
-The container is published on `127.0.0.1:8080` only. Put a reverse proxy in
-front of it for TLS **and authentication** — the app has none of its own, and
-anyone who can reach it can spend your Azure OpenAI quota through
-`/api/openai`.
+The compose unit joins the external `docker_global` network and publishes
+`127.0.0.1:8088` only. Put a reverse proxy in front of it for TLS **and
+authentication** — the app has none of its own, and anyone who can reach it can
+spend your Azure OpenAI quota through `/api/openai`.
+
+If the reverse proxy runs on `docker_global` too, drop the `ports:` block and
+let it target `azure-diagram-builder:80` directly — then nothing is bound on the
+host at all.
 
 Minimal Caddy example:
 
@@ -141,7 +145,7 @@ diagrams.example.com {
     basicauth {
         you <bcrypt-hash>
     }
-    reverse_proxy 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:8088
 }
 ```
 
@@ -160,8 +164,8 @@ docker compose up -d
 docker image prune -f
 ```
 
-To move to a specific build instead of `latest`, set `IMAGE_TAG=<version>` in
-`.env` and repeat.
+To move to a specific build instead of `latest`, change the image tag in
+`docker-compose.yml` to the upstream version and repeat.
 
 To pick up an upstream change immediately, run the workflow manually instead of
 waiting for the weekly schedule.

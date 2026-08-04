@@ -1,14 +1,14 @@
 services:
   azure-diagram-builder:
-    image: ghcr.io/daknoblo/azure-diagram-builder:${IMAGE_TAG:-latest}
+    image: ghcr.io/daknoblo/azure-diagram-builder:latest
     container_name: azure-diagram-builder
     restart: unless-stopped
     env_file:
       - .env
-    # Bound to loopback on purpose: terminate TLS and authenticate in a reverse
-    # proxy in front of it. The container itself has no authentication.
+    # Loopback only: the app has no authentication of its own, so TLS and auth
+    # belong in the reverse proxy in front of it.
     ports:
-      - "127.0.0.1:${HOST_PORT:-8080}:80"
+      - 127.0.0.1:8088:80
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -17,8 +17,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    networks:
+      - docker_global
+networks:
+  docker_global:
+    external: true
