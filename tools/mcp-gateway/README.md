@@ -1,0 +1,127 @@
+# MCP gateway
+
+The single endpoint every client adds. It mounts each backend behind one
+authenticated Streamable HTTP endpoint and re-offers their tools under a
+namespace, so adding a tool to the stack never means touching client config
+again.
+
+| | |
+| --- | --- |
+| Pipeline | [.github/workflows/tool-mcp-gateway.yml](../../.github/workflows/tool-mcp-gateway.yml) |
+| Image | `ghcr.io/daknoblo/mcp-gateway` |
+| Container port | `8000`, path `/mcp` |
+| Built from | this repository — no upstream, nothing under `vendor/` |
+
+Unlike the other tools here this one is ours, roughly forty lines on top of
+[FastMCP](https://gofastmcp.com). The version that matters is therefore the
+pinned FastMCP release in [requirements.txt](requirements.txt), which is also
+recorded on the image as `io.workflow.fastmcp.version`.
+
+## Why an aggregator and not a proxy
+
+Most things called "MCP proxy" are transport bridges: they put each backend on
+its own route (`/markitdown/mcp`, `/diagrams/mcp`), which still leaves one client
+entry per backend. Aggregation means one endpoint whose tool list is the union of
+all backends, which is what FastMCP's `create_proxy` plus `mount(namespace=...)`
+gives.
+
+Namespacing is not cosmetic: it is what allows two backends to expose a tool of
+the same name.
+
+| Backend | Tool | Seen by the client as |
+| --- | --- | --- |
+| `diagrams` | `list_services` | `diagrams_list_services` |
+| `markitdown` | `convert_to_markdown` | `markitdown_convert_to_markdown` |
+
+Renaming a backend key in the config renames every tool it offers, which breaks
+prompts and saved tool references. Treat those keys as API.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_GATEWAY_TOKEN` | — | Bearer token clients must present. **Required**; the gateway exits without it |
+| `MCP_GATEWAY_CONFIG` | `/etc/mcp-gateway/config.json` | Backend definitions |
+| `MCP_GATEWAY_NAME` | `work-tools` | Server name shown to clients |
+| `MCP_GATEWAY_HOST` | `0.0.0.0` | Bind address inside the container |
+| `MCP_GATEWAY_PORT` | `8000` | Listen port |
+| `MCP_GATEWAY_PATH` | `/mcp` | Endpoint path |
+
+The config uses the same `mcpServers` shape as every MCP client, and any
+`${VAR}` in it is expanded from the environment when the gateway starts — so
+backend credentials never sit in the file. A referenced variable that is not set
+is a startup error, never an empty header.
+
+See [deploy/gateway.config.json](../../deploy/gateway.config.json) for the
+deployed configuration.
+
+## Adding a backend
+
+1. Add an entry to `gateway.config.json` under `mcpServers`, keyed by the
+   namespace you want its tools to carry.
+2. Add the service to [deploy/docker-compose.yml](../../deploy/docker-compose.yml)
+   with no `ports:`, and add it to the gateway's `depends_on`.
+3. `docker compose up -d`.
+
+No client changes anywhere. The new tools appear on the next `tools/list`.
+
+## Client configuration
+
+VS Code (`.vscode/mcp.json`), with every secret prompted rather than committed:
+
+```json
+{
+  "servers": {
+    "work-tools": {
+      "type": "http",
+      "url": "https://tools.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:gateway-token}",
+        "CF-Access-Client-Id": "${input:cf-id}",
+        "CF-Access-Client-Secret": "${input:cf-secret}"
+      }
+    }
+  },
+  "inputs": [
+    { "id": "gateway-token", "type": "promptString", "description": "MCP gateway token", "password": true },
+    { "id": "cf-id", "type": "promptString", "description": "CF Access Client Id" },
+    { "id": "cf-secret", "type": "promptString", "description": "CF Access Client Secret", "password": true }
+  ]
+}
+```
+
+Drop the two `CF-Access-*` headers if you are not fronting the tunnel with
+Cloudflare Access.
+
+## Authentication
+
+A static bearer token, checked by FastMCP's `StaticTokenVerifier`. FastMCP's
+documentation calls that verifier development-only because it stores tokens in
+plain text and they never expire — which is precisely what a static bearer token
+is, so the label describes the mechanism rather than a defect in this use. It is
+one layer; Cloudflare Access in front of the tunnel is the other, and the two use
+different headers.
+
+Swap in `JWTVerifier` (HS256 shared secret) in
+[src/gateway.py](src/gateway.py) if you want tokens that expire. Nothing else
+changes.
+
+On Streamable HTTP a session is bound to the credential that created it, so a
+leaked session id is useless without the token that opened it.
+
+## Cost of the extra hop
+
+Proxying adds a round trip. FastMCP measures roughly 300–400 ms for a proxied
+`tools/list` and 200–500 ms per proxied call, against 1–2 ms for a local one.
+Backend tool lists are cached for 300 s, so the listing cost is paid once per
+window rather than per request.
+
+## Troubleshooting
+
+- **Container exits at startup** — read the message: a missing
+  `MCP_GATEWAY_TOKEN`, an unset `${VAR}` in the config, or a config with no
+  `mcpServers` all stop the process deliberately.
+- **A backend's tools are missing** — the gateway logs `mounted <name> -> <url>`
+  per backend. If the line is there but the tools are not, the backend rejected
+  the handshake; check its own auth.
+- **Tool names changed** — someone renamed a key in `mcpServers`.

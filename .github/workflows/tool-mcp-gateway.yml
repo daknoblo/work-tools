@@ -1,0 +1,212 @@
+name: tool - mcp-gateway
+
+# Builds the aggregating MCP gateway - the single endpoint every client adds - and
+# pushes it to this repository's GitHub Container Registry namespace.
+#
+# This tool is first-party, so unlike the others it has nothing under vendor/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Additional image tag (optional)
+        type: string
+        default: ''
+      platforms:
+        description: Target platforms
+        type: choice
+        default: linux/amd64
+        options:
+          - linux/amd64
+          - linux/arm64
+          - linux/amd64,linux/arm64
+      push:
+        description: Push the image to GHCR (uncheck for a build-only dry run)
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/tool-mcp-gateway.yml
+      - scripts/mcp-smoke.sh
+      - tools/mcp-gateway/**
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: mcp-gateway
+  CONTEXT_DIR: tools/mcp-gateway
+
+jobs:
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve build context
+        id: context
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
+        run: |
+          # The gateway has no upstream version of its own; what actually determines its
+          # behaviour is the pinned FastMCP release.
+          fastmcp="$(sed -n 's/^fastmcp==\(.*\)$/\1/p' "${CONTEXT_DIR}/requirements.txt")"
+
+          if [ "${PLATFORMS}" = "linux/amd64" ]; then smoke=true; else smoke=false; fi
+          {
+            echo "fastmcp=${fastmcp}"
+            echo "registry_owner=${GITHUB_REPOSITORY_OWNER,,}"
+            echo "platforms=${PLATFORMS}"
+            echo "smoke=${smoke}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image for smoke test
+        if: steps.context.outputs.smoke == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT_DIR }}
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:smoke
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+
+      # The gateway's whole job is to mount a backend and re-offer its tools under a
+      # namespace, so the smoke test proxies a real one. The stub runs from the gateway
+      # image itself, which already carries FastMCP - no second image to build.
+      - name: Smoke test image
+        if: steps.context.outputs.smoke == 'true'
+        env:
+          MCP_BEARER: smoke-token
+          MCP_SMOKE_CALL: '{"name":"stub_ping","arguments":{}}'
+        run: |
+          docker network create gateway-smoke
+          trap 'docker logs gateway || true; docker logs stub || true;
+                docker rm -f gateway stub > /dev/null 2>&1 || true;
+                docker network rm gateway-smoke > /dev/null 2>&1 || true' EXIT
+
+          docker run -d --name stub --network gateway-smoke \
+            -v "${PWD}/${CONTEXT_DIR}/tests:/tests:ro" \
+            --entrypoint python "${IMAGE_NAME}:smoke" /tests/stub_backend.py
+
+          config="$(mktemp -d)/config.json"
+          cat > "$config" <<'JSON'
+          {
+            "mcpServers": {
+              "stub": { "url": "http://stub:9000/mcp", "transport": "http" }
+            }
+          }
+          JSON
+
+          docker run -d --name gateway --network gateway-smoke \
+            -e MCP_GATEWAY_TOKEN=smoke-token \
+            -v "${config}:/etc/mcp-gateway/config.json:ro" \
+            -p 127.0.0.1:8000:8000 "${IMAGE_NAME}:smoke"
+
+          for _ in $(seq 1 30); do
+            if curl -sS -o /dev/null --max-time 3 http://127.0.0.1:8000/mcp; then break; fi
+            sleep 2
+          done
+
+          for token in '' 'wrong-token'; do
+            args=(-s -o /dev/null -w '%{http_code}' -X POST
+                  -H 'Content-Type: application/json'
+                  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+            [ -n "$token" ] && args+=(-H "Authorization: Bearer ${token}")
+            code="$(curl "${args[@]}" http://127.0.0.1:8000/mcp)"
+            if [ "$code" != "401" ]; then
+              echo "::error::expected 401 for token '${token}', got ${code}"
+              exit 1
+            fi
+          done
+          echo "missing and wrong bearer tokens are rejected"
+
+          # stub_ping rather than ping: the namespace is what keeps two backends from
+          # colliding, so losing it would be a silent regression.
+          scripts/mcp-smoke.sh http://127.0.0.1:8000/mcp stub_ping
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=work-tools MCP gateway
+            org.opencontainers.image.description=Aggregates the work-tools MCP backends behind one authenticated endpoint
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            io.workflow.fastmcp.version=${{ steps.context.outputs.fastmcp }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT_DIR }}
+          platforms: ${{ steps.context.outputs.platforms }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+
+      - name: Attest build provenance
+        if: steps.build.outcome == 'success' && steps.build.outputs.digest != ''
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        if: always()
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          FASTMCP: ${{ steps.context.outputs.fastmcp }}
+        run: |
+          {
+            echo "## mcp-gateway"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| FastMCP | \`${FASTMCP:-unknown}\` |"
+            echo "| Digest | \`${DIGEST:-n/a}\` |"
+            echo
+            echo "Tags:"
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
