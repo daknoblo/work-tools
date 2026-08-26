@@ -1,0 +1,225 @@
+name: tool - markitdown-mcp
+
+# Builds the MarkItDown MCP server from the tree mirrored under vendor/markitdown and
+# pushes it to this repository's GitHub Container Registry namespace. Upstream publishes
+# no image.
+#
+# Upstream changes arrive through sync-markitdown-mcp.yml, so this workflow never reaches
+# out to upstream itself and every image maps to one commit of this repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Additional image tag (optional, e.g. "v0.1.7")
+        type: string
+        default: ''
+      platforms:
+        description: Target platforms
+        type: choice
+        default: linux/amd64
+        options:
+          - linux/amd64
+          - linux/arm64
+          - linux/amd64,linux/arm64
+      push:
+        description: Push the image to GHCR (uncheck for a build-only dry run)
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/tool-markitdown-mcp.yml
+      - scripts/mcp-smoke.sh
+      - tools/markitdown-mcp/**
+      - vendor/markitdown/**
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: markitdown-mcp
+  VENDOR_DIR: vendor/markitdown
+
+jobs:
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve build context
+        id: context
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
+        run: |
+          # Provenance comes from the mirror, not from a live upstream lookup.
+          upstream_repository="$(jq -er '.repository' "${VENDOR_DIR}/UPSTREAM.json")"
+          upstream_ref="$(jq -er '.ref' "${VENDOR_DIR}/UPSTREAM.json")"
+          upstream_sha="$(jq -er '.commit' "${VENDOR_DIR}/UPSTREAM.json")"
+
+          # The wrapper package still declares 0.0.1a5, which says nothing about what is
+          # shipped; the core library version is what upstream actually releases.
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' \
+            "${VENDOR_DIR}/packages/markitdown/src/markitdown/__about__.py")"
+
+          # The smoke test needs to run the image, which only works when building
+          # a single image for the runner's own architecture.
+          if [ "${PLATFORMS}" = "linux/amd64" ]; then smoke=true; else smoke=false; fi
+          {
+            echo "upstream_repository=${upstream_repository}"
+            echo "upstream_ref=${upstream_ref}"
+            echo "upstream_sha=${upstream_sha}"
+            echo "version=${version}"
+            echo "registry_owner=${GITHUB_REPOSITORY_OWNER,,}"
+            echo "platforms=${PLATFORMS}"
+            echo "smoke=${smoke}"
+          } >> "$GITHUB_OUTPUT"
+
+      # vendor/ stays a verbatim mirror, so local changes are applied here rather than
+      # committed into it.
+      - name: Apply local patches
+        run: |
+          shopt -s nullglob
+          patches=(tools/markitdown-mcp/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No local patches."
+            exit 0
+          fi
+          for patch in "${patches[@]}"; do
+            echo "Applying ${patch}"
+            git apply --directory="${VENDOR_DIR}" "$patch"
+          done
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Built and verified before anything is published, so a broken build can never
+      # move the `latest` tag that the VPS pulls.
+      - name: Build image for smoke test
+        if: steps.context.outputs.smoke == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.VENDOR_DIR }}
+          file: tools/markitdown-mcp/Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:smoke
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+
+      - name: Smoke test image
+        if: steps.context.outputs.smoke == 'true'
+        env:
+          # Converting an HTML data: URI exercises a real converter, which is what proves
+          # the [all] extra resolved - listing the tool alone would not.
+          MCP_SMOKE_CALL: '{"name":"convert_to_markdown","arguments":{"uri":"data:text/html;base64,PGgxPkhlbGxvPC9oMT4="}}'
+        run: |
+          docker run -d --name smoke -p 127.0.0.1:3001:3001 "${IMAGE_NAME}:smoke"
+          trap 'docker logs smoke || true; docker rm -f smoke > /dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -sS -o /dev/null --max-time 3 http://127.0.0.1:3001/mcp; then break; fi
+            sleep 2
+          done
+
+          scripts/mcp-smoke.sh http://127.0.0.1:3001/mcp convert_to_markdown
+
+          # The core has to be the vendored one; if pip fell back to PyPI the whole point
+          # of mirroring the source is lost.
+          expected="${{ steps.context.outputs.version }}"
+          actual="$(docker run --rm --entrypoint python "${IMAGE_NAME}:smoke" \
+            -c 'import markitdown; print(markitdown.__version__)')"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::image ships markitdown ${actual}, vendored source is ${expected}"
+            exit 1
+          fi
+          echo "image ships the vendored markitdown ${actual}"
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.context.outputs.version }},enable=${{ steps.context.outputs.version != '' }}
+            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=MarkItDown MCP server
+            org.opencontainers.image.description=MarkItDown document-to-Markdown MCP server, built from a vendored upstream tree
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ steps.context.outputs.upstream_repository }}
+            org.opencontainers.image.version=${{ steps.context.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.context.outputs.upstream_sha }}
+            org.opencontainers.image.licenses=MIT
+            io.workflow.upstream.repository=${{ steps.context.outputs.upstream_repository }}
+            io.workflow.upstream.ref=${{ steps.context.outputs.upstream_ref }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.VENDOR_DIR }}
+          file: tools/markitdown-mcp/Dockerfile
+          platforms: ${{ steps.context.outputs.platforms }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+
+      - name: Attest build provenance
+        if: steps.build.outcome == 'success' && steps.build.outputs.digest != ''
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        if: always()
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          UPSTREAM_REF: ${{ steps.context.outputs.upstream_ref }}
+          UPSTREAM_SHA: ${{ steps.context.outputs.upstream_sha }}
+          VERSION: ${{ steps.context.outputs.version }}
+        run: |
+          {
+            echo "## markitdown-mcp"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Upstream ref | \`${UPSTREAM_REF:-unknown}\` |"
+            echo "| Upstream commit | \`${UPSTREAM_SHA:-unknown}\` |"
+            echo "| Version | \`${VERSION:-unknown}\` |"
+            echo "| Digest | \`${DIGEST:-n/a}\` |"
+            echo
+            echo "Tags:"
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
