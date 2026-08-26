@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "diagrams": {
+      "url": "http://azure-diagram-builder:3030/mcp",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer ${DIAGRAMS_MCP_TOKEN}"
+      }
+    },
+    "markitdown": {
+      "url": "http://markitdown-mcp:3001/mcp",
+      "transport": "http"
+    }
+  }
+}

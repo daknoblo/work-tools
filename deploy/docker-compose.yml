@@ -1,0 +1,80 @@
+# The whole MCP stack. Only the gateway is reachable from outside the compose network;
+# the backends have no `ports:` at all and are addressed by service name.
+#
+# Secrets come from deploy/.env, which is never committed. See deploy/README.md.
+
+name: work-tools
+
+services:
+  mcp-gateway:
+    image: ghcr.io/daknoblo/mcp-gateway:latest
+    container_name: mcp-gateway
+    restart: unless-stopped
+    # Tracking a rolling tag, so never reuse a stale local copy of it.
+    pull_policy: always
+    depends_on:
+      azure-diagram-builder:
+        condition: service_healthy
+      markitdown-mcp:
+        condition: service_healthy
+    environment:
+      # The gateway refuses to start without this, rather than publishing every
+      # backend unauthenticated.
+      MCP_GATEWAY_TOKEN: ${MCP_GATEWAY_TOKEN:?set MCP_GATEWAY_TOKEN in deploy/.env}
+      # Expanded into gateway.config.json when the gateway reads it.
+      DIAGRAMS_MCP_TOKEN: ${DIAGRAMS_MCP_TOKEN:?set DIAGRAMS_MCP_TOKEN in deploy/.env}
+    volumes:
+      - ./gateway.config.json:/etc/mcp-gateway/config.json:ro
+    # The single address cloudflared points at. Drop this block and put cloudflared on
+    # the `mcp` network instead if you would rather bind nothing on the host.
+    ports:
+      - 127.0.0.1:8090:8000
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mcp
+
+  azure-diagram-builder:
+    image: ghcr.io/daknoblo/azure-diagram-builder:latest
+    container_name: azure-diagram-builder
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      # Without this the endpoint is open to anything on the compose network.
+      MCP_AUTH_TOKEN: ${DIAGRAMS_MCP_TOKEN:?set DIAGRAMS_MCP_TOKEN in deploy/.env}
+    # No `read_only` here: this is an upstream image whose write behaviour is not ours
+    # to assume. The other two are built in this repository.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mcp
+
+  markitdown-mcp:
+    image: ghcr.io/daknoblo/markitdown-mcp:latest
+    container_name: markitdown-mcp
+    restart: unless-stopped
+    pull_policy: always
+    # This server has no authentication and its one tool reads file:// URIs and fetches
+    # arbitrary http(s) URLs. It must never be published. Egress stays open because
+    # converting a remote URL is the point of the tool; the gateway's bearer token is
+    # what decides who gets to ask for one.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mcp
+
+networks:
+  mcp:
+    driver: bridge
