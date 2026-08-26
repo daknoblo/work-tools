@@ -1,0 +1,15 @@
+{
+  "repository": "Arturo-Quiroga-MSFT/azure-architecture-diagram-builder",
+  "ref": "v1.9.0",
+  "track": "latest-tag",
+  "license": "MIT",
+  "include": [
+    "LICENSE",
+    "NOTICE",
+    "package.json",
+    "mcp-server",
+    "src/data",
+    "src/services/armExtractor.ts",
+    "Azure_Public_Service_Icons"
+  ]
+}

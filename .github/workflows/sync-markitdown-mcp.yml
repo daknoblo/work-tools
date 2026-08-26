@@ -1,0 +1,28 @@
+name: sync - markitdown-mcp
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream ref to sync (blank follows the latest upstream release)
+        type: string
+        default: ''
+  schedule:
+    # Weekly check for a newer upstream release.
+    - cron: '41 4 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  sync:
+    uses: ./.github/workflows/sync-upstream.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      tool: markitdown-mcp
+      ref: ${{ inputs.ref || '' }}

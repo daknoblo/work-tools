@@ -1,0 +1,112 @@
+name: sync - upstream
+
+# Mirrors a third-party repository into vendor/ and opens a pull request when the
+# result differs from what is committed. Builds then run from the committed tree
+# instead of a fresh upstream checkout, so an image is always reproducible from a
+# single commit of this repository.
+#
+# The mirroring itself lives in scripts/vendor-sync.sh so it can be run by hand.
+
+on:
+  workflow_call:
+    inputs:
+      tool:
+        description: Tool directory under tools/
+        type: string
+        required: true
+      ref:
+        description: Upstream ref to sync (blank honours the tool's track setting)
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  sync:
+    name: Mirror upstream into vendor/
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mirror upstream
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOL: ${{ inputs.tool }}
+          REF_INPUT: ${{ inputs.ref }}
+        run: |
+          config="tools/${TOOL}/upstream.json"
+          previous="$(jq -er '.ref' "$config")"
+
+          scripts/vendor-sync.sh "$TOOL" ${REF_INPUT:+"$REF_INPUT"}
+
+          repository="$(jq -er '.repository' "$config")"
+          vendor="vendor/${repository##*/}"
+          {
+            echo "vendor=${vendor}"
+            echo "previous=${previous}"
+            echo "repository=${repository}"
+            echo "ref=$(jq -er '.ref' "${vendor}/UPSTREAM.json")"
+            echo "commit=$(jq -er '.commit' "${vendor}/UPSTREAM.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open sync pull request
+        id: pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ github.token }}
+          branch: sync/${{ inputs.tool }}
+          delete-branch: true
+          add-paths: |
+            ${{ steps.sync.outputs.vendor }}
+            tools/${{ inputs.tool }}/upstream.json
+          commit-message: |
+            sync(${{ inputs.tool }}): ${{ steps.sync.outputs.repository }}@${{ steps.sync.outputs.ref }}
+
+            Upstream commit ${{ steps.sync.outputs.commit }}.
+          title: "sync(${{ inputs.tool }}): ${{ steps.sync.outputs.ref }}"
+          body: |
+            Mirrors [`${{ steps.sync.outputs.repository }}`](https://github.com/${{ steps.sync.outputs.repository }})
+            into `${{ steps.sync.outputs.vendor }}`.
+
+            | | |
+            | --- | --- |
+            | Ref | `${{ steps.sync.outputs.ref }}` |
+            | Previously pinned | `${{ steps.sync.outputs.previous }}` |
+            | Commit | [`${{ steps.sync.outputs.commit }}`](https://github.com/${{ steps.sync.outputs.repository }}/commit/${{ steps.sync.outputs.commit }}) |
+
+            Local patches under `tools/${{ inputs.tool }}/patches/` were checked against this
+            tree and still apply. Merging triggers the tool's build workflow.
+
+      - name: Summary
+        if: always()
+        env:
+          TOOL: ${{ inputs.tool }}
+          REPOSITORY: ${{ steps.sync.outputs.repository }}
+          REF: ${{ steps.sync.outputs.ref }}
+          PREVIOUS: ${{ steps.sync.outputs.previous }}
+          COMMIT: ${{ steps.sync.outputs.commit }}
+          PR: ${{ steps.pr.outputs.pull-request-url }}
+        run: |
+          {
+            echo "## sync - ${TOOL}"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Upstream | \`${REPOSITORY:-unknown}\` |"
+            echo "| Ref | \`${REF:-unknown}\` (was \`${PREVIOUS:-unknown}\`) |"
+            echo "| Commit | \`${COMMIT:-n/a}\` |"
+            echo
+            if [ -n "$PR" ]; then
+              echo "Pull request: ${PR}"
+            else
+              echo "Vendored tree already matches upstream - no pull request needed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
