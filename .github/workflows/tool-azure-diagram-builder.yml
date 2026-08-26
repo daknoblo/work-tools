@@ -1,19 +1,19 @@
 name: tool - azure-diagram-builder
 
-# Builds a container image for the upstream "Azure Architecture Diagram Builder"
-# (https://github.com/Arturo-Quiroga-MSFT/azure-architecture-diagram-builder), which
-# does not publish one itself, and pushes it to this repository's GitHub Container
-# Registry namespace so it can be run on a VPS with docker compose.
+# Builds the MCP server of the upstream "Azure Architecture Diagram Builder" from the
+# tree mirrored under vendor/ and pushes it to this repository's GitHub Container
+# Registry namespace. Only the MCP server ships: its 13 tools are deterministic, so the
+# image needs no Azure OpenAI credentials and makes no outbound calls. The upstream web
+# UI, its token server and its nginx front end are not part of this image.
+#
+# Upstream changes arrive through sync-azure-diagram-builder.yml, so this workflow never
+# reaches out to upstream itself and every image maps to one commit of this repository.
 
 on:
   workflow_dispatch:
     inputs:
-      upstream_ref:
-        description: Upstream branch, tag or commit SHA to build
-        type: string
-        default: main
       image_tag:
-        description: Additional image tag (optional, e.g. "v1.0.0")
+        description: Additional image tag (optional, e.g. "v1.9.0")
         type: string
         default: ''
       platforms:
@@ -28,22 +28,23 @@ on:
         description: Push the image to GHCR (uncheck for a build-only dry run)
         type: boolean
         default: true
-  schedule:
-    # Weekly rebuild so the deployed image picks up upstream changes.
-    - cron: '17 4 * * 1'
   push:
     branches: [main]
     paths:
       - .github/workflows/tool-azure-diagram-builder.yml
+      - scripts/mcp-smoke.sh
       - tools/azure-diagram-builder/**
+      - vendor/azure-architecture-diagram-builder/**
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 env:
-  UPSTREAM_REPOSITORY: Arturo-Quiroga-MSFT/azure-architecture-diagram-builder
   IMAGE_NAME: azure-diagram-builder
+  VENDOR_DIR: vendor/azure-architecture-diagram-builder
+  # The upstream Dockerfile defaults NPM_REGISTRY to a Microsoft-internal proxy.
+  NPM_REGISTRY: https://registry.npmjs.org/
 
 jobs:
   build:
@@ -61,34 +62,46 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out upstream source
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ inputs.upstream_ref || 'main' }}
-          path: upstream
-          persist-credentials: false
-
       - name: Resolve build context
         id: context
         env:
           PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
         run: |
-          upstream_sha="$(git -C upstream rev-parse HEAD)"
-          # Upstream rarely cuts releases, so package.json is the version source
-          # that is guaranteed to exist for whatever ref is being built.
-          version="$(jq -r '.version // ""' upstream/package.json)"
+          # Provenance comes from the mirror, not from a live upstream lookup.
+          upstream_repository="$(jq -er '.repository' "${VENDOR_DIR}/UPSTREAM.json")"
+          upstream_ref="$(jq -er '.ref' "${VENDOR_DIR}/UPSTREAM.json")"
+          upstream_sha="$(jq -er '.commit' "${VENDOR_DIR}/UPSTREAM.json")"
+
+          version="$(jq -r '.version // ""' "${VENDOR_DIR}/package.json")"
           version="${version#v}"
+
           # The smoke test needs to run the image, which only works when building
           # a single image for the runner's own architecture.
           if [ "${PLATFORMS}" = "linux/amd64" ]; then smoke=true; else smoke=false; fi
           {
+            echo "upstream_repository=${upstream_repository}"
+            echo "upstream_ref=${upstream_ref}"
             echo "upstream_sha=${upstream_sha}"
             echo "version=${version}"
             echo "registry_owner=${GITHUB_REPOSITORY_OWNER,,}"
             echo "platforms=${PLATFORMS}"
             echo "smoke=${smoke}"
           } >> "$GITHUB_OUTPUT"
+
+      # vendor/ stays a verbatim mirror, so local changes are applied here rather than
+      # committed into it.
+      - name: Apply local patches
+        run: |
+          shopt -s nullglob
+          patches=(tools/azure-diagram-builder/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No local patches."
+            exit 0
+          fi
+          for patch in "${patches[@]}"; do
+            echo "Applying ${patch}"
+            git apply --directory="${VENDOR_DIR}" "$patch"
+          done
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -97,134 +110,66 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The published image records the upstream commit it was built from in its
-      # standard OCI revision label, so no extra registry tag is needed to tell
-      # whether a scheduled rebuild would produce anything new.
-      - name: Skip scheduled rebuild if upstream has not changed
-        id: published
-        if: github.event_name == 'schedule'
-        env:
-          IMAGE_REF: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}:latest
-          UPSTREAM_SHA: ${{ steps.context.outputs.upstream_sha }}
-        run: |
-          published_sha="$(
-            docker buildx imagetools inspect "$IMAGE_REF" --format '{{ json .Image }}' 2>/dev/null \
-              | jq -r '[.. | objects | select(has("config")) | .config.Labels // empty
-                        | ."org.opencontainers.image.revision" // empty] | first // ""'
-          )" || published_sha=""
-
-          if [ -n "$published_sha" ] && [ "$published_sha" = "$UPSTREAM_SHA" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Published image already matches upstream ${UPSTREAM_SHA} - nothing to rebuild."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # All VITE_* values are compiled into the browser bundle, so they are public by
-      # definition and live in a repository *variable*, not a secret. Runtime secrets
-      # (Azure OpenAI key, MCP token) are injected on the VPS instead - see
-      # tools/azure-diagram-builder/README.md.
-      - name: Write build-time environment file
-        if: steps.published.outputs.skip != 'true'
-        working-directory: upstream
-        env:
-          BUILD_ENV: ${{ vars.AADB_BUILD_ENV }}
-        run: |
-          printf '%s\n' "${BUILD_ENV}" | tr -d '\r' | sed '/^[[:space:]]*$/d' > .env.build
-
-          if [ ! -s .env.build ]; then
-            echo "::warning::Repository variable AADB_BUILD_ENV is not set - the UI will start without any configured AI models."
-            exit 0
-          fi
-
-          # The upstream Dockerfile sources this file through `xargs`, which mangles
-          # whitespace, so reject anything that is not a plain KEY=VALUE line.
-          if grep -vqE '^(#|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*$)' .env.build; then
-            echo "::error::AADB_BUILD_ENV must contain only comment lines or KEY=VALUE pairs without whitespace."
-            exit 1
-          fi
-
-          echo "Configured build-time keys:"
-          grep -oE '^[A-Za-z_][A-Za-z0-9_]*' .env.build | sort -u
-
-      # Upstream's isAzureOpenAIConfigured() gate was never extended to the
-      # GPT-5.6 family, GPT-5.4 or Kimi K2.7, so an image configured only with
-      # those reports "Azure OpenAI is not configured" even though the models
-      # work. Asserting on the anchor makes the patch fail loudly rather than
-      # silently rot once upstream touches that line.
-      - name: Patch upstream model-availability check
-        if: steps.published.outputs.skip != 'true'
-        working-directory: upstream
-        run: |
-          python3 - src/services/azureOpenAI.ts <<'PY'
-          import sys
-
-          path = sys.argv[1]
-          anchor = "return hasEndpoint && (hasGpt51"
-          missing = ("GPT54", "GPT56SOL", "GPT56TERRA", "GPT56LUNA", "KIMIK27CODE")
-
-          src = open(path).read()
-          if src.count(anchor) != 1:
-              sys.exit(f"::error::Expected exactly one occurrence of the availability-check "
-                       f"anchor in {path}, found {src.count(anchor)}. Re-check the patch.")
-
-          extra = " || ".join(f"!!import.meta.env.VITE_AZURE_OPENAI_DEPLOYMENT_{k}" for k in missing)
-          open(path, "w").write(src.replace(anchor, f"return hasEndpoint && ({extra} || hasGpt51", 1))
-          print(f"Patched {path}: added {', '.join(missing)}")
-          PY
-
       - name: Set up QEMU
-        if: steps.published.outputs.skip != 'true' && contains(inputs.platforms, 'arm64')
+        if: contains(inputs.platforms, 'arm64')
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        if: steps.published.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v3
 
-      # Built and verified before anything is published, so a broken build can
-      # never move the `latest` tag that the VPS pulls. This is not paranoia:
-      # `npm ci` is known to report failure while still exiting 0, which would
-      # otherwise produce an image whose Node services are silently missing.
+      # Built and verified before anything is published, so a broken build can never
+      # move the `latest` tag that the VPS pulls. The build distils 108 MB of pricing
+      # data and 700-odd icons into sidecars inside the image; a tools/list would not
+      # notice if those came out empty, so the smoke test calls a tool as well.
       - name: Build image for smoke test
-        if: steps.published.outputs.skip != 'true' && steps.context.outputs.smoke == 'true'
+        if: steps.context.outputs.smoke == 'true'
         uses: docker/build-push-action@v6
         with:
-          context: upstream
-          file: upstream/Dockerfile
+          context: ${{ env.VENDOR_DIR }}
+          file: ${{ env.VENDOR_DIR }}/mcp-server/Dockerfile
+          build-args: NPM_REGISTRY=${{ env.NPM_REGISTRY }}
           load: true
           tags: ${{ env.IMAGE_NAME }}:smoke
           cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
 
       - name: Smoke test image
-        if: steps.published.outputs.skip != 'true' && steps.context.outputs.smoke == 'true'
+        if: steps.context.outputs.smoke == 'true'
+        env:
+          MCP_BEARER: smoke-token
+          MCP_SMOKE_CALL: '{"name":"list_services","arguments":{}}'
         run: |
-          docker run -d --name smoke -p 127.0.0.1:8080:80 "${IMAGE_NAME}:smoke"
+          docker run -d --name smoke \
+            -e MCP_AUTH_TOKEN=smoke-token \
+            -p 127.0.0.1:3030:3030 "${IMAGE_NAME}:smoke"
           trap 'docker logs smoke || true; docker rm -f smoke > /dev/null 2>&1 || true' EXIT
 
           for _ in $(seq 1 30); do
-            if curl -fsS -o /dev/null http://127.0.0.1:8080/; then break; fi
+            if curl -fsS -o /dev/null http://127.0.0.1:3030/healthz; then break; fi
             sleep 2
           done
+          curl -fsS -o /dev/null http://127.0.0.1:3030/healthz
+          echo "health endpoint answers"
 
-          echo "nginx serves the SPA"
-          curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
+          # The bearer gate runs ahead of any MCP handling, so this needs no handshake.
+          for token in '' 'wrong-token'; do
+            args=(-s -o /dev/null -w '%{http_code}' -X POST
+                  -H 'Content-Type: application/json'
+                  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+            [ -n "$token" ] && args+=(-H "Authorization: Bearer ${token}")
+            code="$(curl "${args[@]}" http://127.0.0.1:3030/mcp)"
+            if [ "$code" != "401" ]; then
+              echo "::error::expected 401 for token '${token}', got ${code}"
+              exit 1
+            fi
+          done
+          echo "missing and wrong bearer tokens are rejected"
 
-          echo "static assets are present"
-          curl -fsS -o /dev/null http://127.0.0.1:8080/vite.svg
-          curl -fsS -o /dev/null "http://127.0.0.1:8080/Azure_Public_Service_Icons/Icons/management%20%2B%20governance/00002-icon-service-Alerts.svg"
-
-          # 502/504 means nginx is up but the Node process behind it is not.
-          echo "token server is listening"
-          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/speech-token)"
-          case "$code" in 502|504|000) echo "::error::token server not reachable (HTTP $code)"; exit 1 ;; esac
-
-          echo "MCP server is listening"
-          curl -fsS -o /dev/null --max-time 15 http://127.0.0.1:8080/mcp/healthz
+          scripts/mcp-smoke.sh http://127.0.0.1:3030/mcp \
+            list_services validate_architecture estimate_costs generate_bicep render_diagram
 
       - name: Derive image metadata
         id: meta
-        if: steps.published.outputs.skip != 'true'
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
@@ -233,23 +178,23 @@ jobs:
             type=raw,value=${{ steps.context.outputs.version }},enable=${{ steps.context.outputs.version != '' }}
             type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
           labels: |
-            org.opencontainers.image.title=Azure Architecture Diagram Builder
-            org.opencontainers.image.description=Self-hosted build of the Azure Architecture Diagram Builder
+            org.opencontainers.image.title=Azure Diagram Builder MCP server
+            org.opencontainers.image.description=Deterministic Azure architecture MCP tools, built from a vendored upstream tree
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.url=https://github.com/${{ env.UPSTREAM_REPOSITORY }}
+            org.opencontainers.image.url=https://github.com/${{ steps.context.outputs.upstream_repository }}
             org.opencontainers.image.version=${{ steps.context.outputs.version }}
             org.opencontainers.image.revision=${{ steps.context.outputs.upstream_sha }}
             org.opencontainers.image.licenses=MIT
-            io.workflow.upstream.repository=${{ env.UPSTREAM_REPOSITORY }}
-            io.workflow.upstream.ref=${{ inputs.upstream_ref || 'main' }}
+            io.workflow.upstream.repository=${{ steps.context.outputs.upstream_repository }}
+            io.workflow.upstream.ref=${{ steps.context.outputs.upstream_ref }}
 
       - name: Build and push
         id: build
-        if: steps.published.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
-          context: upstream
-          file: upstream/Dockerfile
+          context: ${{ env.VENDOR_DIR }}
+          file: ${{ env.VENDOR_DIR }}/mcp-server/Dockerfile
+          build-args: NPM_REGISTRY=${{ env.NPM_REGISTRY }}
           platforms: ${{ steps.context.outputs.platforms }}
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -270,27 +215,24 @@ jobs:
       - name: Summary
         if: always()
         env:
-          SKIPPED: ${{ steps.published.outputs.skip }}
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
+          UPSTREAM_REF: ${{ steps.context.outputs.upstream_ref }}
+          UPSTREAM_SHA: ${{ steps.context.outputs.upstream_sha }}
           VERSION: ${{ steps.context.outputs.version }}
         run: |
           {
             echo "## azure-diagram-builder"
             echo
-            if [ "$SKIPPED" = "true" ]; then
-              echo "Upstream unchanged - build skipped."
-            else
-              echo "| Field | Value |"
-              echo "| --- | --- |"
-              echo "| Upstream ref | \`${UPSTREAM_REF}\` |"
-              echo "| Version | \`${VERSION:-unknown}\` |"
-              echo "| Digest | \`${DIGEST:-n/a}\` |"
-              echo
-              echo "Tags:"
-              echo '```'
-              echo "${TAGS}"
-              echo '```'
-            fi
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Upstream ref | \`${UPSTREAM_REF:-unknown}\` |"
+            echo "| Upstream commit | \`${UPSTREAM_SHA:-unknown}\` |"
+            echo "| Version | \`${VERSION:-unknown}\` |"
+            echo "| Digest | \`${DIGEST:-n/a}\` |"
+            echo
+            echo "Tags:"
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
