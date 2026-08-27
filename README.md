@@ -94,6 +94,9 @@ Every pipeline:
 - runs on `workflow_dispatch` and on pushes touching its own files or its mirror;
 - builds the image and smoke-tests it **before** pushing, so a broken build can
   never move the `latest` tag the VPS pulls;
+- builds `linux/amd64` and `linux/arm64` on runners of that architecture, so both
+  are smoke-tested for real rather than emulated, then joins them into one
+  manifest — a half-finished matrix never gets a tag;
 - publishes `latest` plus whatever version the upstream declares — no invented
   version numbers;
 - pushes with SBOM, provenance and a build provenance attestation;

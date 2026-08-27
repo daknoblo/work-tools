@@ -8,22 +8,17 @@ name: tool - azure-diagram-builder
 #
 # Upstream changes arrive through sync-azure-diagram-builder.yml, so this workflow never
 # reaches out to upstream itself and every image maps to one commit of this repository.
+#
+# Each architecture is built and smoke-tested on a runner of that architecture, then the
+# two are joined into one manifest.
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Additional image tag (optional, e.g. "v1.9.0")
+        description: Additional image tag (optional, e.g. "v1.10.1")
         type: string
         default: ''
-      platforms:
-        description: Target platforms
-        type: choice
-        default: linux/amd64
-        options:
-          - linux/amd64
-          - linux/arm64
-          - linux/amd64,linux/arm64
       push:
         description: Push the image to GHCR (uncheck for a build-only dry run)
         type: boolean
@@ -47,15 +42,17 @@ env:
   NPM_REGISTRY: https://registry.npmjs.org/
 
 jobs:
-  build:
-    name: Build and publish image
+  prepare:
+    name: Resolve tags and labels
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
-
+    outputs:
+      image: ${{ steps.ctx.outputs.image }}
+      version: ${{ steps.ctx.outputs.version }}
+      upstream_ref: ${{ steps.ctx.outputs.upstream_ref }}
+      upstream_sha: ${{ steps.ctx.outputs.upstream_sha }}
+      push: ${{ steps.ctx.outputs.push }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
     steps:
       - name: Check out this repository
         uses: actions/checkout@v4
@@ -63,30 +60,68 @@ jobs:
           persist-credentials: false
 
       - name: Resolve build context
-        id: context
-        env:
-          PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
+        id: ctx
         run: |
           # Provenance comes from the mirror, not from a live upstream lookup.
-          upstream_repository="$(jq -er '.repository' "${VENDOR_DIR}/UPSTREAM.json")"
-          upstream_ref="$(jq -er '.ref' "${VENDOR_DIR}/UPSTREAM.json")"
-          upstream_sha="$(jq -er '.commit' "${VENDOR_DIR}/UPSTREAM.json")"
-
           version="$(jq -r '.version // ""' "${VENDOR_DIR}/package.json")"
-          version="${version#v}"
-
-          # The smoke test needs to run the image, which only works when building
-          # a single image for the runner's own architecture.
-          if [ "${PLATFORMS}" = "linux/amd64" ]; then smoke=true; else smoke=false; fi
           {
-            echo "upstream_repository=${upstream_repository}"
-            echo "upstream_ref=${upstream_ref}"
-            echo "upstream_sha=${upstream_sha}"
-            echo "version=${version}"
-            echo "registry_owner=${GITHUB_REPOSITORY_OWNER,,}"
-            echo "platforms=${PLATFORMS}"
-            echo "smoke=${smoke}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}"
+            echo "version=${version#v}"
+            echo "upstream_repository=$(jq -er '.repository' "${VENDOR_DIR}/UPSTREAM.json")"
+            echo "upstream_ref=$(jq -er '.ref' "${VENDOR_DIR}/UPSTREAM.json")"
+            echo "upstream_sha=$(jq -er '.commit' "${VENDOR_DIR}/UPSTREAM.json")"
+            echo "push=${{ github.event_name != 'workflow_dispatch' || inputs.push }}"
           } >> "$GITHUB_OUTPUT"
+
+      # Resolved once here rather than per architecture, so the tag and label set
+      # cannot drift between the two.
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ctx.outputs.image }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.ctx.outputs.version }},enable=${{ steps.ctx.outputs.version != '' }}
+            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=Azure Diagram Builder MCP server
+            org.opencontainers.image.description=Deterministic Azure architecture MCP tools, built from a vendored upstream tree
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ steps.ctx.outputs.upstream_repository }}
+            org.opencontainers.image.version=${{ steps.ctx.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.ctx.outputs.upstream_sha }}
+            org.opencontainers.image.licenses=MIT
+            io.workflow.upstream.repository=${{ steps.ctx.outputs.upstream_repository }}
+            io.workflow.upstream.ref=${{ steps.ctx.outputs.upstream_ref }}
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Name this platform
+        id: plat
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "key=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
 
       # vendor/ stays a verbatim mirror, so local changes are applied here rather than
       # committed into it.
@@ -110,10 +145,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        if: contains(inputs.platforms, 'arm64')
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -122,7 +153,6 @@ jobs:
       # data and 700-odd icons into sidecars inside the image; a tools/list would not
       # notice if those came out empty, so the smoke test calls a tool as well.
       - name: Build image for smoke test
-        if: steps.context.outputs.smoke == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.VENDOR_DIR }}
@@ -130,11 +160,10 @@ jobs:
           build-args: NPM_REGISTRY=${{ env.NPM_REGISTRY }}
           load: true
           tags: ${{ env.IMAGE_NAME }}:smoke
-          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
-          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
 
       - name: Smoke test image
-        if: steps.context.outputs.smoke == 'true'
         env:
           MCP_BEARER: smoke-token
           MCP_SMOKE_CALL: '{"name":"list_services","arguments":{}}'
@@ -168,58 +197,108 @@ jobs:
           scripts/mcp-smoke.sh http://127.0.0.1:3030/mcp \
             list_services validate_architecture estimate_costs generate_bicep render_diagram
 
-      - name: Derive image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.context.outputs.version }},enable=${{ steps.context.outputs.version != '' }}
-            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
-          labels: |
-            org.opencontainers.image.title=Azure Diagram Builder MCP server
-            org.opencontainers.image.description=Deterministic Azure architecture MCP tools, built from a vendored upstream tree
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.url=https://github.com/${{ steps.context.outputs.upstream_repository }}
-            org.opencontainers.image.version=${{ steps.context.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.context.outputs.upstream_sha }}
-            org.opencontainers.image.licenses=MIT
-            io.workflow.upstream.repository=${{ steps.context.outputs.upstream_repository }}
-            io.workflow.upstream.ref=${{ steps.context.outputs.upstream_ref }}
-
-      - name: Build and push
+      # Pushed by digest and left untagged; the merge job is what gives these a name.
+      - name: Build and push by digest
         id: build
+        if: needs.prepare.outputs.push == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.VENDOR_DIR }}
           file: ${{ env.VENDOR_DIR }}/mcp-server/Dockerfile
           build-args: NPM_REGISTRY=${{ env.NPM_REGISTRY }}
-          platforms: ${{ steps.context.outputs.platforms }}
-          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ needs.prepare.outputs.labels }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
-          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+
+      - name: Export digest
+        if: needs.prepare.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        if: needs.prepare.outputs.push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish manifest
+    needs: [prepare, build]
+    if: needs.prepare.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ env.IMAGE_NAME }}-*
+          merge-multiple: true
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create manifest
+        id: manifest
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=(-t "$tag")
+          done <<< "$TAGS"
+
+          docker buildx imagetools create "${tag_args[@]}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+          first="$(printf '%s\n' "$TAGS" | sed -n '1p')"
+          digest="$(docker buildx imagetools inspect "$first" \
+            --format '{{ json .Manifest }}' | jq -r .digest)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+          echo "Published architectures:"
+          docker buildx imagetools inspect "$first" \
+            --format '{{ range .Manifest.Manifests }}{{ if .Platform.Architecture }}  {{ .Platform.OS }}/{{ .Platform.Architecture }}{{ println }}{{ end }}{{ end }}'
 
       - name: Attest build provenance
-        if: steps.build.outcome == 'success' && steps.build.outputs.digest != ''
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ needs.prepare.outputs.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
       - name: Summary
         if: always()
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-          UPSTREAM_REF: ${{ steps.context.outputs.upstream_ref }}
-          UPSTREAM_SHA: ${{ steps.context.outputs.upstream_sha }}
-          VERSION: ${{ steps.context.outputs.version }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          UPSTREAM_REF: ${{ needs.prepare.outputs.upstream_ref }}
+          UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           {
             echo "## azure-diagram-builder"
@@ -229,6 +308,7 @@ jobs:
             echo "| Upstream ref | \`${UPSTREAM_REF:-unknown}\` |"
             echo "| Upstream commit | \`${UPSTREAM_SHA:-unknown}\` |"
             echo "| Version | \`${VERSION:-unknown}\` |"
+            echo "| Platforms | \`linux/amd64\`, \`linux/arm64\` |"
             echo "| Digest | \`${DIGEST:-n/a}\` |"
             echo
             echo "Tags:"
