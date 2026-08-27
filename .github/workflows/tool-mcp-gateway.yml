@@ -4,6 +4,11 @@ name: tool - mcp-gateway
 # pushes it to this repository's GitHub Container Registry namespace.
 #
 # This tool is first-party, so unlike the others it has nothing under vendor/.
+#
+# Each architecture is built and smoke-tested on a runner of that architecture, then
+# the two are joined into one manifest. Emulating arm64 on an amd64 runner would
+# publish an image that never ran before it was published, which is the one thing
+# these pipelines exist to prevent.
 
 on:
   workflow_dispatch:
@@ -12,14 +17,6 @@ on:
         description: Additional image tag (optional)
         type: string
         default: ''
-      platforms:
-        description: Target platforms
-        type: choice
-        default: linux/amd64
-        options:
-          - linux/amd64
-          - linux/arm64
-          - linux/amd64,linux/arm64
       push:
         description: Push the image to GHCR (uncheck for a build-only dry run)
         type: boolean
@@ -40,15 +37,15 @@ env:
   CONTEXT_DIR: tools/mcp-gateway
 
 jobs:
-  build:
-    name: Build and publish image
+  prepare:
+    name: Resolve tags and labels
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
-
+    outputs:
+      image: ${{ steps.ctx.outputs.image }}
+      fastmcp: ${{ steps.ctx.outputs.fastmcp }}
+      push: ${{ steps.ctx.outputs.push }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
     steps:
       - name: Check out this repository
         uses: actions/checkout@v4
@@ -56,21 +53,64 @@ jobs:
           persist-credentials: false
 
       - name: Resolve build context
-        id: context
-        env:
-          PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
+        id: ctx
         run: |
-          # The gateway has no upstream version of its own; what actually determines its
-          # behaviour is the pinned FastMCP release.
+          # The gateway has no upstream version of its own; what actually determines
+          # its behaviour is the pinned FastMCP release.
           fastmcp="$(sed -n 's/^fastmcp==\(.*\)$/\1/p' "${CONTEXT_DIR}/requirements.txt")"
-
-          if [ "${PLATFORMS}" = "linux/amd64" ]; then smoke=true; else smoke=false; fi
           {
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}"
             echo "fastmcp=${fastmcp}"
-            echo "registry_owner=${GITHUB_REPOSITORY_OWNER,,}"
-            echo "platforms=${PLATFORMS}"
-            echo "smoke=${smoke}"
+            echo "push=${{ github.event_name != 'workflow_dispatch' || inputs.push }}"
           } >> "$GITHUB_OUTPUT"
+
+      # Resolved once here rather than per architecture, so the tag and label set
+      # cannot drift between the two.
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ctx.outputs.image }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=work-tools MCP gateway
+            org.opencontainers.image.description=Aggregates the work-tools MCP backends behind one authenticated endpoint
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+            io.workflow.fastmcp.version=${{ steps.ctx.outputs.fastmcp }}
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Name this platform
+        id: plat
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "key=${PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -79,28 +119,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        if: contains(inputs.platforms, 'arm64')
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build image for smoke test
-        if: steps.context.outputs.smoke == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.CONTEXT_DIR }}
           load: true
           tags: ${{ env.IMAGE_NAME }}:smoke
-          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
-          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
 
       # The gateway's whole job is to mount a backend and re-offer its tools under a
       # namespace, so the smoke test proxies a real one. The stub runs from the gateway
       # image itself, which already carries FastMCP - no second image to build.
       - name: Smoke test image
-        if: steps.context.outputs.smoke == 'true'
         env:
           MCP_BEARER: smoke-token
           MCP_SMOKE_CALL: '{"name":"stub_ping","arguments":{}}'
@@ -150,52 +184,104 @@ jobs:
           # colliding, so losing it would be a silent regression.
           scripts/mcp-smoke.sh http://127.0.0.1:8000/mcp stub_ping
 
-      - name: Derive image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
-          labels: |
-            org.opencontainers.image.title=work-tools MCP gateway
-            org.opencontainers.image.description=Aggregates the work-tools MCP backends behind one authenticated endpoint
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.url=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=MIT
-            io.workflow.fastmcp.version=${{ steps.context.outputs.fastmcp }}
-
-      - name: Build and push
+      # Pushed by digest and left untagged; the merge job is what gives these a name.
+      - name: Build and push by digest
         id: build
+        if: needs.prepare.outputs.push == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.CONTEXT_DIR }}
-          platforms: ${{ steps.context.outputs.platforms }}
-          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ needs.prepare.outputs.labels }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
-          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+
+      - name: Export digest
+        if: needs.prepare.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        if: needs.prepare.outputs.push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.IMAGE_NAME }}-${{ steps.plat.outputs.key }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish manifest
+    needs: [prepare, build]
+    if: needs.prepare.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ env.IMAGE_NAME }}-*
+          merge-multiple: true
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create manifest
+        id: manifest
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tag_args+=(-t "$tag")
+          done <<< "$TAGS"
+
+          docker buildx imagetools create "${tag_args[@]}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+          first="$(printf '%s\n' "$TAGS" | sed -n '1p')"
+          digest="$(docker buildx imagetools inspect "$first" \
+            --format '{{ json .Manifest }}' | jq -r .digest)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+          echo "Published architectures:"
+          docker buildx imagetools inspect "$first" \
+            --format '{{ range .Manifest.Manifests }}{{ if .Platform.Architecture }}  {{ .Platform.OS }}/{{ .Platform.Architecture }}{{ println }}{{ end }}{{ end }}'
 
       - name: Attest build provenance
-        if: steps.build.outcome == 'success' && steps.build.outputs.digest != ''
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ghcr.io/${{ steps.context.outputs.registry_owner }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ needs.prepare.outputs.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
       - name: Summary
         if: always()
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-          FASTMCP: ${{ steps.context.outputs.fastmcp }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          FASTMCP: ${{ needs.prepare.outputs.fastmcp }}
         run: |
           {
             echo "## mcp-gateway"
@@ -203,6 +289,7 @@ jobs:
             echo "| Field | Value |"
             echo "| --- | --- |"
             echo "| FastMCP | \`${FASTMCP:-unknown}\` |"
+            echo "| Platforms | \`linux/amd64\`, \`linux/arm64\` |"
             echo "| Digest | \`${DIGEST:-n/a}\` |"
             echo
             echo "Tags:"
