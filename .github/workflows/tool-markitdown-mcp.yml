@@ -139,11 +139,13 @@ jobs:
           trap 'docker logs smoke || true; docker rm -f smoke > /dev/null 2>&1 || true' EXIT
 
           for _ in $(seq 1 30); do
-            if curl -sS -o /dev/null --max-time 3 http://127.0.0.1:3001/mcp; then break; fi
+            if curl -sS -o /dev/null --max-time 3 http://127.0.0.1:3001/mcp/; then break; fi
             sleep 2
           done
 
-          scripts/mcp-smoke.sh http://127.0.0.1:3001/mcp convert_to_markdown
+          # The trailing slash is load-bearing: the app is mounted at /mcp/, and /mcp
+          # answers 307, which neither curl nor the gateway's HTTP client follows.
+          scripts/mcp-smoke.sh http://127.0.0.1:3001/mcp/ convert_to_markdown
 
           # The core has to be the vendored one; if pip fell back to PyPI the whole point
           # of mirroring the source is lost.

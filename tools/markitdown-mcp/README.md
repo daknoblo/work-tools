@@ -10,7 +10,7 @@ ships a Dockerfile but publishes no image.
 | Sync | [.github/workflows/sync-markitdown-mcp.yml](../../.github/workflows/sync-markitdown-mcp.yml) |
 | Image | `ghcr.io/daknoblo/markitdown-mcp` |
 | Vendored at | [vendor/markitdown](../../vendor/markitdown) |
-| Container port | `3001`, path `/mcp` |
+| Container port | `3001`, path `/mcp/` |
 | Tool | `convert_to_markdown(uri)` — one tool, reached as `markitdown_convert_to_markdown` |
 
 Converts a document to Markdown from an `http://`, `https://`, `file://` or
@@ -67,10 +67,14 @@ repository track its tags one-to-one.
 docker run --rm -d --name md -p 127.0.0.1:3001:3001 ghcr.io/daknoblo/markitdown-mcp:latest
 
 MCP_SMOKE_CALL='{"name":"convert_to_markdown","arguments":{"uri":"data:text/html;base64,PGgxPkhlbGxvPC9oMT4="}}' \
-  scripts/mcp-smoke.sh http://127.0.0.1:3001/mcp convert_to_markdown
+  scripts/mcp-smoke.sh http://127.0.0.1:3001/mcp/ convert_to_markdown
 
 docker rm -f md
 ```
+
+Mind the trailing slash. The MCP app is mounted at `/mcp/`, and `/mcp` answers
+`307` — a redirect that neither curl nor the gateway's HTTP client follows, so
+getting it wrong looks like a server that speaks no MCP at all.
 
 Listing the tool only proves it registered; converting something proves the
 `[all]` extra actually resolved.

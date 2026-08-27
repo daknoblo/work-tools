@@ -8,7 +8,7 @@
       }
     },
     "markitdown": {
-      "url": "http://markitdown-mcp:3001/mcp",
+      "url": "http://markitdown-mcp:3001/mcp/",
       "transport": "http"
     }
   }
