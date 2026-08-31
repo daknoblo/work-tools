@@ -174,7 +174,6 @@ async def generate_diagram(
     code: str,
     filename: Optional[str] = None,
     timeout: int = 90,
-    workspace_dir: Optional[str] = None,
 ) -> DiagramGenerateResponse:
     """Generate a diagram from Python code using the `diagrams` package (Azure only)."""
     scan_result = await scan_python_code(code)
@@ -185,23 +184,12 @@ async def generate_diagram(
         )
     if filename is None:
         filename = f'diagram_{uuid.uuid4().hex[:8]}'
-    if os.path.isabs(filename):
-        output_path = os.path.normpath(filename)
-    else:
-        simple_filename = os.path.basename(filename)
-        
-        # Check if workspace_dir has already contains 'diagrams' string in it
-        if workspace_dir and 'diagrams' in workspace_dir.lower():
-            output_dir = workspace_dir  # Use as is
-        elif workspace_dir and os.path.isdir(workspace_dir) and os.access(workspace_dir, os.W_OK):
-            # Create diagrams folder instead of generated-diagrams
-            output_dir = os.path.join(workspace_dir, 'diagrams')
-        else:
-            # Use cross-platform temporary directory
-            temp_base = tempfile.gettempdir()
-            output_dir = os.path.join(temp_base, 'diagrams')
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.normpath(os.path.join(output_dir, simple_filename))
+    # The PNG travels back with the reply, so this path is never read by the caller.
+    # Fixing the directory and reducing the name to its last component keeps a crafted
+    # filename from choosing where the server writes.
+    output_dir = os.path.join(tempfile.gettempdir(), 'diagrams')
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, os.path.basename(filename))
     try:
         namespace = _new_namespace()
         code = _rewrite_diagram_calls(code, output_path)

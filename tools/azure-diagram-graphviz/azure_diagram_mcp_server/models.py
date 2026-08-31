@@ -24,10 +24,6 @@ class DiagramGenerateRequest(BaseModel):
         description='Output filename (without extension). If not provided, a random name will be generated.',
     )
     timeout: int = Field(90, description='Timeout in seconds for diagram generation', ge=1, le=300)
-    workspace_dir: Optional[str] = Field(
-        None,
-        description='The user\'s current workspace directory. If provided, diagrams will be saved to a "generated-diagrams" subdirectory.',
-    )
     @field_validator('code')
     @classmethod
     def validate_code(cls, v):

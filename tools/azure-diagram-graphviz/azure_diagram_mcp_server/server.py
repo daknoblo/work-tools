@@ -56,9 +56,8 @@ WORKFLOW:
    - Submit your code to generate a PNG diagram
    - Optionally specify a filename
    - The diagram is generated with show=False to prevent automatic display
-   - The PNG comes back inline with the reply, so there is no path for you to open and
-     no need to pass workspace_dir: this server may be running on a different machine
-     than you are
+   - The PNG comes back inline with the reply, so there is no path for you to open:
+     this server may be running on a different machine than you are
    - Every icon of the listed providers is already in scope, so an unimported name still resolves.
      Write the explicit imports anyway: the code is saved next to the PNG as diagram_code.py and
      should run on its own. Where a name exists in several providers, Azure wins.
@@ -73,10 +72,9 @@ async def mcp_generate_diagram(
     code: str = Field(..., description='Python code using the diagrams package DSL'),
     filename: Optional[str] = Field(None, description='Output filename (without extension)'),
     timeout: int = Field(90, description='Timeout in seconds for diagram generation'),
-    workspace_dir: Optional[str] = Field(None, description='Workspace directory to save diagrams'),
 ):
     """Generate a diagram from Python code using the diagrams package (Azure only)."""
-    result = await generate_diagram(code, filename, timeout, workspace_dir)
+    result = await generate_diagram(code, filename, timeout)
     if result.status != 'success' or not result.path:
         return result
 

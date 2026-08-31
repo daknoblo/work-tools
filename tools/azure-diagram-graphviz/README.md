@@ -57,6 +57,11 @@ a workspace does not help — the client still cannot open it. The tool now retu
 the message plus an `image/png` content block, so the diagram travels with the
 reply. The pipeline asserts that block is present on every build.
 
+That made the `workspace_dir` parameter pointless, so it is gone, and with it the
+branch that let an absolute `filename` pick its own output path. Output always
+lands in `$TMPDIR/diagrams` under the last component of the given name: nothing a
+caller sends decides where this server writes.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MCP_TRANSPORT` | `stdio` | `streamable-http` for container use |
