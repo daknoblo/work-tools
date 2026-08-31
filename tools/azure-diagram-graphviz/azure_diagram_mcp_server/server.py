@@ -39,9 +39,9 @@ mcp = FastMCP(
 
 WORKFLOW:
 1. list_icons:
-   - Discover all available icons in the diagrams package for Azure
-   - Browse Azure providers, services, and icons organized hierarchically
-   - Find the exact import paths for Azure icons you want to use
+   - Discover all available icons in the diagrams package
+   - Browse providers, services and icons organized hierarchically
+   - Find the exact import paths for the icons you want to use
    - Providers: azure, k8s, onprem, generic, programming
    - provider_filter and service_filter narrow the listing to one area; omit both to browse everything
 
@@ -100,7 +100,7 @@ async def mcp_list_diagram_icons(
     provider_filter: Optional[str] = Field(None, description='Filter icons by provider name'),
     service_filter: Optional[str] = Field(None, description='Filter icons by service name'),
 ):
-    """List available Azure icons from the diagrams package."""
+    """List available icons from the diagrams package."""
     return list_diagram_icons(provider_filter, service_filter)
 
 def main():

@@ -450,7 +450,7 @@ _ICON_INDEX: Optional[dict] = None
 def list_diagram_icons(
     provider_filter: Optional[str] = None, service_filter: Optional[str] = None
 ) -> DiagramIconsResponse:
-    """List available Azure icons from the diagrams package, with optional filtering."""
+    """List available icons from the diagrams package, with optional filtering."""
     global _ICON_INDEX
     logger.debug(f'Filters - provider: {provider_filter}, service: {service_filter}')
     try:
