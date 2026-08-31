@@ -41,26 +41,51 @@ prompts and saved tool references. Treat those keys as API.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MCP_GATEWAY_TOKEN` | — | Bearer token clients must present. **Required**; the gateway exits without it |
-| `MCP_GATEWAY_CONFIG` | `/etc/mcp-gateway/config.json` | Backend definitions |
+| `MCP_GATEWAY_BACKENDS` | — | Backends as JSON, keyed by namespace. **Required** |
 | `MCP_GATEWAY_NAME` | `work-tools` | Server name shown to clients |
 | `MCP_GATEWAY_HOST` | `0.0.0.0` | Bind address inside the container |
 | `MCP_GATEWAY_PORT` | `8000` | Listen port |
 | `MCP_GATEWAY_PATH` | `/mcp` | Endpoint path |
 
-The config uses the same `mcpServers` shape as every MCP client, and any
-`${VAR}` in it is expanded from the environment when the gateway starts — so
-backend credentials never sit in the file. A referenced variable that is not set
-is a startup error, never an empty header.
+The backend map is a JSON object whose keys are namespaces and whose values take
+the same shape as an entry in any MCP client's `mcpServers`:
 
-See [deploy/gateway.config.json](../../deploy/gateway.config.json) for the
-deployed configuration.
+```json
+{
+  "diagrams": {
+    "url": "http://azure-diagram-builder:3030/mcp",
+    "transport": "http",
+    "headers": { "Authorization": "Bearer ${DIAGRAMS_MCP_TOKEN}" }
+  },
+  "markitdown": {
+    "url": "http://markitdown-mcp:3001/mcp/",
+    "transport": "http"
+  }
+}
+```
+
+It is an environment variable rather than a file so that deploying is a compose
+file and an `.env`, with nothing to copy onto the host beside them.
+
+Any `${VAR}` inside it is resolved from the environment at startup, which keeps
+backend credentials out of the map itself — the map can then live in the compose
+file while the secrets stay in `.env`. A referenced variable that is not set is a
+startup error, never an empty header.
+
+Mind the trailing slash on `markitdown`: it serves at `/mcp/` and answers `/mcp`
+with a `307` that the gateway's HTTP client does not follow.
+
+See the `mcp-gateway` service in
+[deploy/docker-compose.yml](../../deploy/docker-compose.yml) for the deployed
+configuration.
 
 ## Adding a backend
 
-1. Add an entry to `gateway.config.json` under `mcpServers`, keyed by the
+1. Add an entry to `MCP_GATEWAY_BACKENDS` in
+   [deploy/docker-compose.yml](../../deploy/docker-compose.yml), keyed by the
    namespace you want its tools to carry.
-2. Add the service to [deploy/docker-compose.yml](../../deploy/docker-compose.yml)
-   with no `ports:`, and add it to the gateway's `depends_on`.
+2. Add the service to the same file with no `ports:`, and add it to the gateway's
+   `depends_on`.
 3. `docker compose up -d`.
 
 No client changes anywhere. The new tools appear on the next `tools/list`.
@@ -119,8 +144,8 @@ window rather than per request.
 ## Troubleshooting
 
 - **Container exits at startup** — read the message: a missing
-  `MCP_GATEWAY_TOKEN`, an unset `${VAR}` in the config, or a config with no
-  `mcpServers` all stop the process deliberately.
+  `MCP_GATEWAY_TOKEN`, an unset `${VAR}` inside `MCP_GATEWAY_BACKENDS`, or a map
+  that is empty or not valid JSON all stop the process deliberately.
 - **A backend's tools are missing** — the gateway logs `mounted <name> -> <url>`
   per backend. If the line is there but the tools are not, the backend rejected
   the handshake; check its own auth.

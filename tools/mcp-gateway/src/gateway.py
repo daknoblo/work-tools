@@ -2,6 +2,9 @@
 
 Clients add this server once; every backend's tools arrive namespaced as
 ``<backend>_<tool>``, so adding a tool to the stack never touches client config.
+
+The backend map arrives as JSON in MCP_GATEWAY_BACKENDS rather than as a file, so
+deploying is a compose file and an .env and nothing else.
 """
 
 from __future__ import annotations
@@ -10,7 +13,6 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
@@ -21,13 +23,13 @@ PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def expand(value: Any) -> Any:
-    """Resolve ${VAR} references so backend credentials stay out of the config file."""
+    """Resolve ${VAR} references so backend credentials stay out of the backend map."""
 
     def substitute(match: re.Match[str]) -> str:
         name = match.group(1)
         resolved = os.environ.get(name)
         if not resolved:
-            raise SystemExit(f"config references ${{{name}}}, which is not set")
+            raise SystemExit(f"MCP_GATEWAY_BACKENDS references ${{{name}}}, which is not set")
         return resolved
 
     if isinstance(value, str):
@@ -39,18 +41,23 @@ def expand(value: Any) -> Any:
     return value
 
 
-def load_backends(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise SystemExit(f"{path} not found")
-    try:
-        config = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
-        raise SystemExit(f"{path} is not valid JSON: {error}") from error
+def load_backends() -> dict[str, Any]:
+    raw = os.environ.get("MCP_GATEWAY_BACKENDS", "").strip()
+    if not raw:
+        raise SystemExit("MCP_GATEWAY_BACKENDS is required")
 
-    backends = expand(config).get("mcpServers")
-    if not backends:
-        raise SystemExit(f"{path} declares no mcpServers")
-    return backends
+    try:
+        backends = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"MCP_GATEWAY_BACKENDS is not valid JSON: {error}") from error
+
+    if not isinstance(backends, dict) or not backends:
+        raise SystemExit(
+            'MCP_GATEWAY_BACKENDS must be a non-empty JSON object keyed by namespace, '
+            'e.g. {"markitdown": {"url": "http://markitdown-mcp:3001/mcp/", "transport": "http"}}'
+        )
+
+    return expand(backends)
 
 
 def main() -> None:
@@ -59,8 +66,7 @@ def main() -> None:
         # Refusing to start beats quietly publishing every backend unauthenticated.
         raise SystemExit("MCP_GATEWAY_TOKEN is required")
 
-    config_path = Path(os.environ.get("MCP_GATEWAY_CONFIG", "/etc/mcp-gateway/config.json"))
-    backends = load_backends(config_path)
+    backends = load_backends()
 
     gateway = FastMCP(
         name=os.environ.get("MCP_GATEWAY_NAME", "work-tools"),

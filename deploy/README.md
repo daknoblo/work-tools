@@ -23,7 +23,6 @@ the only thing keeping it private.
 ```bash
 mkdir -p /opt/work-tools && cd /opt/work-tools
 curl -O https://raw.githubusercontent.com/daknoblo/work-tools/main/deploy/docker-compose.yml
-curl -O https://raw.githubusercontent.com/daknoblo/work-tools/main/deploy/gateway.config.json
 curl -o .env https://raw.githubusercontent.com/daknoblo/work-tools/main/deploy/.env.example
 
 # Two independent tokens; neither has a default.
@@ -33,9 +32,14 @@ sed -i "s/^DIAGRAMS_MCP_TOKEN=.*/DIAGRAMS_MCP_TOKEN=$(openssl rand -hex 32)/" .e
 docker compose up -d
 ```
 
-`gateway.config.json` carries no secrets: `${DIAGRAMS_MCP_TOKEN}` is expanded by
-the gateway at startup from the environment, so the file is safe to keep in git
-and to copy around.
+Two files on the host and nothing else. Which backends to aggregate is
+`MCP_GATEWAY_BACKENDS` in the compose file, so there is no third file to keep in
+sync with it.
+
+That map carries no secrets. The `$$` in front of `${DIAGRAMS_MCP_TOKEN}` stops
+compose from substituting it, so the container receives a literal placeholder
+that the gateway resolves at startup — the token travels only in its own
+variable.
 
 Both variables are declared `${VAR:?...}` in the compose file, so a missing token
 stops the stack rather than starting an unauthenticated one.

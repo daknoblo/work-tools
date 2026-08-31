@@ -116,8 +116,7 @@ For an upstream MCP server:
 3. Copy `sync-markitdown-mcp.yml` and `tool-markitdown-mcp.yml`, adjusting the
    tool name, vendor directory and expected tools.
 4. Add the service to [deploy/docker-compose.yml](deploy/docker-compose.yml) with
-   no `ports:`, and a namespaced entry to
-   [deploy/gateway.config.json](deploy/gateway.config.json).
+   no `ports:`, and a namespaced entry to the gateway's `MCP_GATEWAY_BACKENDS`.
 5. Add it to the table above with a `README.md`.
 
 Nothing on any client changes — that is the point of the gateway.

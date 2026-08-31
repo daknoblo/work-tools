@@ -148,18 +148,9 @@ jobs:
             -v "${PWD}/${CONTEXT_DIR}/tests:/tests:ro" \
             --entrypoint python "${IMAGE_NAME}:smoke" /tests/stub_backend.py
 
-          config="$(mktemp -d)/config.json"
-          cat > "$config" <<'JSON'
-          {
-            "mcpServers": {
-              "stub": { "url": "http://stub:9000/mcp", "transport": "http" }
-            }
-          }
-          JSON
-
           docker run -d --name gateway --network gateway-smoke \
             -e MCP_GATEWAY_TOKEN=smoke-token \
-            -v "${config}:/etc/mcp-gateway/config.json:ro" \
+            -e MCP_GATEWAY_BACKENDS='{"stub":{"url":"http://stub:9000/mcp","transport":"http"}}' \
             -p 127.0.0.1:8000:8000 "${IMAGE_NAME}:smoke"
 
           for _ in $(seq 1 30); do
