@@ -11,7 +11,7 @@ cloudflared ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030
 
 | Service | Published | Authentication |
 | --- | --- | --- |
-| [mcp-gateway](../tools/mcp-gateway/README.md) | `127.0.0.1:8090` | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
+| [mcp-gateway](../tools/mcp-gateway/README.md) | `127.0.0.1:8191` | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
 | [azure-diagram-builder](../tools/azure-diagram-builder/README.md) | no | `Bearer $DIAGRAMS_MCP_TOKEN` |
 | [markitdown-mcp](../tools/markitdown-mcp/README.md) | no | none |
 
@@ -86,7 +86,7 @@ credentials-file: /root/.cloudflared/<tunnel-id>.json
 
 ingress:
   - hostname: tools.example.com
-    service: http://127.0.0.1:8090
+    service: http://127.0.0.1:8191
     originRequest:
       connectTimeout: 30s
       # MCP responses stream, so chunked encoding has to stay on.
@@ -103,6 +103,10 @@ systemctl restart cloudflared
 That loopback port is the only reason the gateway has a `ports:` entry at all. A
 cloudflared container on `docker_global` would target `http://mcp-gateway:8000`
 instead, and the entry could go.
+
+The host side of it is `GATEWAY_HOST_PORT` in `.env`, defaulting to `8191`. It
+belongs there rather than in the compose file because the compose file is
+re-downloaded on every update and would take a hand-edited port with it.
 
 Cloudflare returns **error 524** when an origin has not started responding within
 100 seconds, on every plan below Enterprise, and it cannot be raised. The diagram
@@ -123,7 +127,7 @@ entirely.
 ## Verify
 
 ```bash
-curl -sS http://127.0.0.1:8090/mcp \
+curl -sS http://127.0.0.1:8191/mcp \
   -H "Authorization: Bearer $MCP_GATEWAY_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -135,7 +139,7 @@ handshake and asserts the tools are there:
 
 ```bash
 MCP_BEARER=$MCP_GATEWAY_TOKEN scripts/mcp-smoke.sh \
-  http://127.0.0.1:8090/mcp diagrams_list_services markitdown_convert_to_markdown
+  http://127.0.0.1:8191/mcp diagrams_list_services markitdown_convert_to_markdown
 ```
 
 Confirm the backends are not published on the host:

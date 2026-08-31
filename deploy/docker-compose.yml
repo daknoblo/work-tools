@@ -27,7 +27,7 @@ services:
           }
         }
     ports:
-      - 127.0.0.1:8090:8000
+      - 127.0.0.1:${GATEWAY_HOST_PORT:-8191}:8000
     read_only: true
     tmpfs:
       - /tmp
