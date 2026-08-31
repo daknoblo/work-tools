@@ -44,6 +44,28 @@ variable.
 Both variables are declared `${VAR:?...}` in the compose file, so a missing token
 stops the stack rather than starting an unauthenticated one.
 
+## Four things in the compose file that look wrong and are not
+
+The file carries no comments, so they are recorded here instead.
+
+**`$$` in front of `${DIAGRAMS_MCP_TOKEN}`.** Not a typo. A single `$` would make
+compose substitute the token into `MCP_GATEWAY_BACKENDS`, where it would then sit
+in `docker inspect` output and in `docker compose config`. Doubled, the container
+receives a literal placeholder and the gateway resolves it at startup.
+
+**The trailing slash on `markitdown-mcp:3001/mcp/`.** Its MCP app is mounted at
+`/mcp/` and answers `/mcp` with a `307`, which the gateway's HTTP client does not
+follow. Without the slash the backend simply appears to speak no MCP.
+
+**`read_only` on two services but not on `azure-diagram-builder`.** That one is
+an upstream image whose write behaviour is not ours to assume; the other two are
+built in this repository, so their filesystem access is known.
+
+**No `ports:` on the backends.** `markitdown-mcp` has no authentication of its
+own and its one tool reads `file://` URIs and fetches arbitrary URLs. The compose
+network is what keeps it private, and the gateway's bearer token is the only
+thing deciding who may ask it for anything.
+
 ## Verify
 
 ```bash
