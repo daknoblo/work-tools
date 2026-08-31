@@ -8,7 +8,8 @@ the tools behind it can come and go without touching client configuration.
 
 ```
 client ──▶ mcp-gateway ──┬──▶ azure-diagram-builder
-                         └──▶ markitdown-mcp
+                         ├──▶ markitdown-mcp
+                         └──▶ azure-diagram-graphviz
 ```
 
 ## Tools
@@ -20,7 +21,60 @@ client ──▶ mcp-gateway ──┬──▶ azure-diagram-builder
 | MarkItDown | `ghcr.io/daknoblo/markitdown-mcp` | [microsoft/markitdown](https://github.com/microsoft/markitdown) | [docs](tools/markitdown-mcp/README.md) |
 | Azure diagram renderer | `ghcr.io/daknoblo/azure-diagram-graphviz` | forked from [dminkovski/azure-diagram-mcp](https://github.com/dminkovski/azure-diagram-mcp), now first-party | [docs](tools/azure-diagram-graphviz/README.md) |
 
-Deployment for all three: [deploy/README.md](deploy/README.md).
+Deployment for all four: [deploy/README.md](deploy/README.md).
+
+## Which tool for what
+
+Each backend is mounted under a namespace, so every tool name starts with
+`diagrams_`, `markitdown_` or `graphviz_`. The two diagram namespaces are the
+easy ones to confuse.
+
+**`markitdown_*` — get the text out of a document.** One tool, one argument: a
+`http:`, `https:`, `file:` or `data:` URI. PDFs, Office files, HTML, images,
+audio. Use it when you want the *content* of something rather than a picture of
+it.
+
+**`diagrams_*` — design and check an Azure architecture.** Thirteen tools built
+around one canonical shape, `{services, connections, groups}`. That shape feeds
+WellArchitected validation, cost estimates, region comparison, hardening,
+Bicep/Terraform generation and a deployment runbook — and only at the end a
+rendered SVG or interactive HTML. Reach for it when the picture is a by-product
+of designing something real and you want to know whether the design holds up,
+what it costs per month, or what the Terraform looks like.
+`diagrams_render_diagram` is the last step of that pipeline, not a drawing tool:
+it only draws services the catalogue knows.
+
+**`graphviz_*` — draw a picture.** You write Python `diagrams` code, you get a
+PNG. Nothing is validated, costed or generated, and that is the point: there is
+no catalogue to satisfy, so you decide what goes on the canvas and how it is
+arranged, including clusters and edge labels.
+
+It is **not** limited to Azure, despite what the upstream tool description used
+to say. The execution namespace preloads `azure`, `generic`, `k8s`, `onprem` and
+`programming`, which was verified by rendering a Kubernetes pod next to a
+PostgreSQL and a Prometheus, and a pure `StartEnd`/`Decision`/`Action` flowchart
+with no infrastructure in it at all. Azure is imported last, so where a name
+exists in several providers — `SQL`, `Firewall`, `Subnet`, `Users` — the Azure
+icon wins.
+
+| You want | Use |
+| --- | --- |
+| the text of a PDF, DOCX, webpage or audio file | `markitdown_convert_to_markdown` |
+| to know whether an Azure design is sound, or what it costs | `diagrams_validate_architecture`, `diagrams_estimate_costs` |
+| deployable Bicep or Terraform from that design | `diagrams_generate_bicep`, `diagrams_generate_terraform` |
+| an Azure architecture diagram for a document | `diagrams_render_diagram` (SVG or interactive HTML) |
+| a flowchart, a Kubernetes sketch, a mixed-stack drawing | `graphviz_generate_diagram` |
+| any diagram the Azure catalogue does not cover | `graphviz_generate_diagram` |
+
+The output format often settles it on its own: `diagrams_render_diagram` returns
+SVG or HTML, which is what you want embedded in a document or opened in a
+browser. `graphviz_generate_diagram` returns the PNG **inline in the reply**, so
+it lands straight in a chat, an issue or a slide without going through a file.
+
+Starting points for the Graphviz one: `graphviz_get_diagram_examples` for
+working code, `graphviz_list_icons` for what can appear in it. Imports are
+optional — every icon is already in scope — but writing them anyway keeps the
+saved `diagram_code.py` runnable on its own.
 
 ## Layout
 

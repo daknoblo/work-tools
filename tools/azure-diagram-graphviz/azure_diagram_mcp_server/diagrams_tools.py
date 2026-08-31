@@ -175,7 +175,7 @@ async def generate_diagram(
     filename: Optional[str] = None,
     timeout: int = 90,
 ) -> DiagramGenerateResponse:
-    """Generate a diagram from Python code using the `diagrams` package (Azure only)."""
+    """Generate a diagram from Python code using the `diagrams` package."""
     scan_result = await scan_python_code(code)
     if scan_result.has_errors:
         return DiagramGenerateResponse(
@@ -242,7 +242,7 @@ async def generate_diagram(
         return DiagramGenerateResponse(status='error', message=_describe_exec_error(e, code))
 
 def get_diagram_examples(diagram_type: DiagramType = DiagramType.ALL) -> DiagramExampleResponse:
-    """Get example code for different types of diagrams (Azure only)."""
+    """Get example code for different types of diagrams."""
     examples = {}
     # Azure basic example
     if diagram_type in [DiagramType.AZURE, DiagramType.ALL]:

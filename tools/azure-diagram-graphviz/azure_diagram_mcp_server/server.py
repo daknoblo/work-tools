@@ -73,7 +73,11 @@ async def mcp_generate_diagram(
     filename: Optional[str] = Field(None, description='Output filename (without extension)'),
     timeout: int = Field(90, description='Timeout in seconds for diagram generation'),
 ):
-    """Generate a diagram from Python code using the diagrams package (Azure only)."""
+    """Generate a diagram from Python code using the diagrams package.
+
+    Azure, generic, k8s, onprem and programming icons are all in scope, so this draws
+    anything from an Azure architecture to a plain flowchart.
+    """
     result = await generate_diagram(code, filename, timeout)
     if result.status != 'success' or not result.path:
         return result
@@ -88,7 +92,7 @@ async def mcp_generate_diagram(
 async def mcp_get_diagram_examples(
     diagram_type: str = Field('all', description='Type of diagram example to return'),
 ):
-    """Get example code for different types of diagrams (Azure only)."""
+    """Get example code for different types of diagrams."""
     return get_diagram_examples(DiagramType(diagram_type))
 
 @mcp.tool(name='list_icons')

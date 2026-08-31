@@ -1,6 +1,6 @@
 # Azure diagram renderer (Graphviz)
 
-Renders Azure diagrams from the Python [`diagrams`](https://diagrams.mingrammer.com)
+Renders diagrams from the Python [`diagrams`](https://diagrams.mingrammer.com)
 DSL and hands the PNG back inline.
 
 | | |
@@ -14,7 +14,19 @@ DSL and hands the PNG back inline.
 | --- | --- |
 | `generate_diagram` | Python `diagrams` code in, PNG out |
 | `get_diagram_examples` | Example code per diagram type |
-| `list_icons` | Available Azure icons and their import paths |
+| `list_icons` | Available icons and their import paths |
+
+## Scope is wider than the name suggests
+
+The execution namespace preloads five providers — `generic`, `programming`,
+`k8s`, `onprem` and `azure` — so this draws Kubernetes sketches, mixed-stack
+diagrams and plain flowcharts as readily as Azure architectures. Upstream
+described both tools as "Azure only"; that was wrong and is corrected here,
+because the description is what a model reads when deciding whether the tool
+fits.
+
+Azure is imported last, so where a name exists in several providers — `SQL`,
+`Firewall`, `Subnet`, `Users`, `Databricks` — the Azure icon wins.
 
 ## Not the same thing as the diagram builder
 
@@ -24,7 +36,8 @@ confuse. They take opposite inputs:
 | | this tool | `diagrams_render_diagram` |
 | --- | --- | --- |
 | Input | Python `diagrams` code | `{services, connections}` JSON |
-| Output | PNG (Graphviz) | SVG or HTML |
+| Output | PNG, inline in the reply | SVG or HTML |
+| Scope | any icon in five providers | the Azure service catalogue |
 | Good for | drawing something you describe in code | visualising an architecture the other tools produced |
 
 ## Why it lives here rather than under vendor/
