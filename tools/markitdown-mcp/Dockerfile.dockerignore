@@ -1,0 +1,6 @@
+# Upstream ships its own .dockerignore as an allowlist (`*` then `!packages/`), which
+# would keep LICENSE out of the build context. BuildKit prefers this file over the one
+# in the context, so the mirror's ignore rules stay upstream's business.
+*
+!packages/
+!LICENSE

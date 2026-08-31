@@ -52,6 +52,18 @@ build fails if pip fell back to PyPI.
 
 Upstream's Dockerfile stays in `vendor/` as a reference.
 
+Next to ours sits [Dockerfile.dockerignore](Dockerfile.dockerignore), which
+BuildKit prefers over the one in the build context. Upstream's is an allowlist
+(`*` then `!packages/`) that would otherwise keep `LICENSE` out of the context
+entirely — and their ignore rules should stay theirs to change.
+
+## Licensing
+
+`pyproject.toml` declares `license = "MIT"` but names no `license-files`, so
+neither wheel carries the licence text and pip leaves none behind. The image
+therefore takes it from the mirrored tree into `/licenses/LICENSE`, and the
+smoke test asserts it is there rather than trusting it.
+
 ## Versioning
 
 The wrapper package still declares `0.0.1a5`, which says nothing about what
