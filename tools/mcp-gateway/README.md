@@ -32,6 +32,11 @@ the same name.
 | --- | --- | --- |
 | `diagrams` | `list_services` | `diagrams_list_services` |
 | `markitdown` | `convert_to_markdown` | `markitdown_convert_to_markdown` |
+| `graphviz` | `generate_diagram` | `graphviz_generate_diagram` |
+
+The current stack offers 17 tools this way: 13 under `diagrams`, 3 under
+`graphviz`, 1 under `markitdown`. Which to reach for is covered in the
+[repository README](../../README.md#which-tool-for-what).
 
 Renaming a backend key in the config renames every tool it offers, which breaks
 prompts and saved tool references. Treat those keys as API.

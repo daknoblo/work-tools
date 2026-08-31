@@ -34,6 +34,35 @@ That is what makes the MCP-only cut worthwhile: no `AZURE_OPENAI_ENDPOINT`, no
 API key, no managed identity, nothing to leak. The web app's AI features are the
 part that needed those, and they are not here.
 
+## What each tool does
+
+They are built to chain rather than to be used one at a time: almost all of them
+take or return the same `{services, connections, groups}` object, so one tool's
+output is the next one's input.
+
+| Tool | What it does |
+| --- | --- |
+| `list_services` | The catalogue — names, categories, aliases, whether pricing data exists, cost ranges. Start here to learn which service names the other tools accept. |
+| `get_waf_rules` | The rule base behind the review: architecture-wide patterns plus per-service best practices, filterable by WAF pillar. |
+| `validate_architecture` | Scores the architecture 0-100 against the Well-Architected Framework, with findings grouped by pillar and concrete recommendations. |
+| `harden_architecture` | Fixes the findings a *diagram* can express, then re-validates. Deliberately conservative: it will not invent a database replica without a target, and Front Door alone does not clear a single-region finding — pass `secondaryRegion` to resolve those for real. |
+| `estimate_costs` | Monthly fixed-price baseline with low/expected/high, what was excluded and why, and which region the numbers actually came from. Not a total: usage-based services are left out by design. |
+| `compare_region_costs` | The same architecture priced across 2-14 regions with quantities and tiers held identical. Ranks only when every region has native data — never a heuristic multiplier. |
+| `generate_bicep` | Deployable Bicep with secure defaults already set (HTTPS-only, TLS 1.2, managed identity, Key Vault purge protection, …) plus a map of which WAF finding each setting resolves. |
+| `generate_terraform` | The same for Terraform (`azurerm`), including resource group and provider block. |
+| `generate_manifest` | The `az prototype` interchange manifest — the format the web app and `az prototype build` read. |
+| `generate_deployment_guide` | A Markdown runbook: prerequisites, login, IaC commands, a post-deploy hardening checklist derived from the findings, per-service smoke tests, teardown. |
+| `render_diagram` | SVG for embedding in documents, or self-contained interactive HTML with pan, zoom and tooltips. Label every connection with a short phrase saying what flows and why — that is what makes the picture readable. |
+| `export_reactflow_scene` | A React Flow scene the Diagram Builder web app opens directly. |
+| `import_architecture` | The way *in*. Reads an interchange manifest, a React Flow scene, or an **ARM template / `az group export`** and normalises it into the canonical shape. |
+
+The last one is easy to overlook and is the most useful entry point: point it at
+an exported resource group and you can validate, cost, harden and render an
+architecture that already exists, without describing it by hand first.
+
+Nothing here deploys. `generate_bicep`, `generate_terraform` and
+`generate_deployment_guide` all stop at producing text.
+
 ## Configuration
 
 | Variable | Default | Purpose |

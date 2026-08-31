@@ -12,9 +12,22 @@ DSL and hands the PNG back inline.
 
 | Tool | Purpose |
 | --- | --- |
-| `generate_diagram` | Python `diagrams` code in, PNG out |
-| `get_diagram_examples` | Example code per diagram type |
-| `list_icons` | Available icons and their import paths |
+| `generate_diagram` | Python `diagrams` code in, PNG out. Every icon is already in scope, so the code needs no imports, and the rendered PNG comes back in the reply. |
+| `get_diagram_examples` | Working example code per diagram type. The quickest way to see the DSL rather than guess at it. |
+| `list_icons` | Which icons exist and what they are called, filterable by provider and service. |
+
+## This tool executes the code you send it
+
+`generate_diagram` runs the submitted Python in-process. A scan rejects the
+obvious cases first — `exec(`, `eval(`, `__import__`, `subprocess`, `os.system`
+— but it matches substrings line by line rather than parsing the code, so it is
+a speed bump, not a sandbox. Anyone determined enough to obfuscate a call gets
+past it.
+
+What actually contains this is the container: read-only root filesystem, a
+writable `/tmp` only, `USER nobody`, all capabilities dropped, no published
+port, and reachable solely from inside `docker_global` via the gateway. Keep it
+that way. In particular, do not give it a bind mount or a port of its own.
 
 ## Scope is wider than the name suggests
 

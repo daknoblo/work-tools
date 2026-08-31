@@ -18,6 +18,30 @@ Converts a document to Markdown from an `http://`, `https://`, `file://` or
 messages, audio transcription and YouTube transcripts all work; `ffmpeg` and
 `exiftool` are in the image because those extras are useless without them.
 
+## What it converts
+
+| | |
+| --- | --- |
+| Documents | PDF, DOCX, PPTX, XLSX, XLS, EPUB, Outlook `.msg` |
+| Text and data | CSV, HTML, plain text, Jupyter `.ipynb` |
+| Web | any URL, with dedicated handling for Wikipedia articles, Bing result pages, RSS feeds and YouTube (transcript) |
+| Media | images and audio — see the caveats below |
+| Archives | ZIP, walked entry by entry and converted individually |
+
+Three of those behave differently than the list suggests, and the differences
+are the kind you would rather know before sending a file:
+
+- **Audio transcription leaves the machine.** The transcriber calls
+  `recognize_google()`, so the audio is uploaded to Google's Web Speech API.
+  Metadata extraction via `exiftool` is local; the transcript is not. Do not
+  send anything confidential through it.
+- **Images yield metadata only.** A description would need a multimodal LLM
+  client, and none is configured here — by design, since that is exactly the
+  credential this cut of the image avoids. You get EXIF, not a caption.
+- **The two Azure converters are inert.** `DocumentIntelligence` and
+  `ContentUnderstanding` ship with the package but need an endpoint and key that
+  this container does not have.
+
 ## Security
 
 This is the part to read before exposing anything.
