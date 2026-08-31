@@ -37,7 +37,6 @@ services:
       - no-new-privileges:true
     networks:
       - docker_global
-      - mcp
 
   azure-diagram-builder:
     image: ghcr.io/daknoblo/azure-diagram-builder:latest
@@ -66,10 +65,8 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - mcp
+      - docker_global
 
 networks:
   docker_global:
     external: true
-  mcp:
-    driver: bridge

@@ -1,34 +1,33 @@
 # Deploying the stack
 
-Three containers. Only the gateway is meant to be reached from outside, and it is
-the only thing a client ever configures.
+Three containers, all on the shared `docker_global` network. Only the gateway is
+meant to be reached from outside, and it is the only thing a client ever
+configures.
 
 ```
-cloudflared ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030   (docker_global)
-                              └──▶ markitdown-mcp:3001        (private)
+cloudflared ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030
+                              └──▶ markitdown-mcp:3001
 ```
 
-| Service | Networks | Authentication |
+| Service | Published | Authentication |
 | --- | --- | --- |
-| [mcp-gateway](../tools/mcp-gateway/README.md) | `docker_global` + private | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
-| [azure-diagram-builder](../tools/azure-diagram-builder/README.md) | `docker_global` | `Bearer $DIAGRAMS_MCP_TOKEN` |
-| [markitdown-mcp](../tools/markitdown-mcp/README.md) | private only | none — see below |
+| [mcp-gateway](../tools/mcp-gateway/README.md) | `127.0.0.1:8090` | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
+| [azure-diagram-builder](../tools/azure-diagram-builder/README.md) | no | `Bearer $DIAGRAMS_MCP_TOKEN` |
+| [markitdown-mcp](../tools/markitdown-mcp/README.md) | no | none |
 
-`docker_global` is the pre-existing shared network and is declared `external`, so
-this stack expects it to be there rather than creating it.
+`docker_global` is declared `external`, so this stack expects it to exist rather
+than creating it.
 
-**`markitdown-mcp` is deliberately not on it.** It has no authentication of any
-kind, and its one tool fetches whatever `http(s)://` URL it is handed and returns
-the body. On a network shared with everything else, that turns it into an open
-request proxy for any container that can resolve its name — including toward
-services that have no authentication of their own. Its own bearer-less-ness is
-fine only because the sole thing that can reach it is the gateway, which does
-authenticate.
+The backends publish nothing. They are reached by service name from the gateway,
+and the gateway's own port is bound to loopback, so the only route in is whatever
+tunnel you put in front of it.
 
-The other two carry bearer tokens, so being on the shared network costs nothing:
-an unauthenticated caller there gets a `401`.
-
-No backend publishes a port.
+`markitdown-mcp` has no authentication of any kind and its one tool fetches
+whatever `http(s)://` URL it is handed. That is tolerable here because every
+container able to reach it is already on `docker_global` and could make the same
+request itself — it is not a step up from anywhere. It stops being tolerable the
+moment something with a narrower network view can reach it, so do not publish a
+port for it or give it a hostname of its own.
 
 ## Install
 
@@ -56,7 +55,7 @@ variable.
 Both variables are declared `${VAR:?...}` in the compose file, so a missing token
 stops the stack rather than starting an unauthenticated one.
 
-## Four things in the compose file that look wrong and are not
+## Three things in the compose file that look wrong and are not
 
 The file carries no comments, so they are recorded here instead.
 
@@ -73,16 +72,12 @@ follow. Without the slash the backend simply appears to speak no MCP.
 an upstream image whose write behaviour is not ours to assume; the other two are
 built in this repository, so their filesystem access is known.
 
-**`markitdown-mcp` on its own network while everything else is on
-`docker_global`.** Reachability is the only access control that service has, so
-the gateway is the only thing given it. See the table at the top.
-
 ## Exposing it
 
-The gateway sits on `docker_global`, so a reverse proxy or cloudflared already on
-that network reaches it at `http://mcp-gateway:8000` with nothing bound on the
-host. The `ports:` entry publishing `127.0.0.1:8090` is only there for a
-cloudflared that runs on the host instead; drop it if yours is containerised.
+One hostname, pointed at the gateway. The backends never appear in any tunnel
+configuration — they are reached by service name from inside `docker_global`.
+
+If cloudflared runs as a container on `docker_global`:
 
 ```yaml
 ingress:
@@ -95,6 +90,9 @@ ingress:
   - service: http_status:404
 ```
 
+That needs no published port at all, so the `ports:` entry can go. If cloudflared
+runs on the host instead, keep the entry and use `http://127.0.0.1:8090`.
+
 Cloudflare returns **error 524** when an origin has not started responding within
 100 seconds, on every plan below Enterprise, and it cannot be raised. The diagram
 builder's tools are deterministic and answer in milliseconds; the only realistic
@@ -102,13 +100,14 @@ candidate is `markitdown_convert_to_markdown` on a large PDF or an audio file.
 Once the server starts streaming the limit no longer applies — it bounds time to
 first byte, not total duration.
 
-Cloudflare Access adds a second, independent layer. It uses its own
-`CF-Access-Client-Id` and `CF-Access-Client-Secret` headers, so it does not
-collide with the gateway's `Authorization` header — provided you do **not**
-enable Access's single-header mode, which would consume `Authorization` itself.
-An Access policy protecting an MCP endpoint must use the **Service Auth** action;
-any other action redirects to an identity-provider login that an MCP client
-cannot complete. Avoid **Bypass**, which switches off logging entirely.
+Access is optional here: the gateway already requires a bearer token, and the VPS
+has no other way in. If you do add it, it uses its own `CF-Access-Client-Id` and
+`CF-Access-Client-Secret` headers and does not collide with `Authorization` —
+provided you do **not** enable Access's single-header mode, which would consume
+`Authorization` itself. An Access policy protecting an MCP endpoint must use the
+**Service Auth** action; any other action redirects to an identity-provider login
+that an MCP client cannot complete. Avoid **Bypass**, which switches off logging
+entirely.
 
 ## Verify
 
@@ -128,12 +127,10 @@ MCP_BEARER=$MCP_GATEWAY_TOKEN scripts/mcp-smoke.sh \
   http://127.0.0.1:8090/mcp diagrams_list_services markitdown_convert_to_markdown
 ```
 
-Confirm the unauthenticated backend is not reachable from the shared network:
+Confirm the backends are not published on the host:
 
 ```bash
-docker run --rm --network docker_global alpine \
-  sh -c 'apk add -q curl && curl -sS -o /dev/null -w "%{http_code}\n" --max-time 5 \
-         http://markitdown-mcp:3001/mcp/'   # expect a failure to connect, not a 200
+ss -ltnp | grep -E '3030|3001' || echo 'backends bind nothing on the host'
 ```
 
 ## Update
@@ -151,11 +148,14 @@ its tag with a published version and repeat.
 
 - **Gateway container exits immediately** — `MCP_GATEWAY_TOKEN` is empty. It
   refuses to start rather than serve every backend unauthenticated.
-- **`config references ${DIAGRAMS_MCP_TOKEN}, which is not set`** — the variable
-  reached compose but not the gateway container; check the `environment:` block.
+- **`MCP_GATEWAY_BACKENDS references ${DIAGRAMS_MCP_TOKEN}, which is not set`** —
+  the variable reached compose but not the gateway container; check the
+  `environment:` block.
 - **Gateway healthy, tools missing** — a backend failed its handshake. The
   gateway logs one `mounted <name> -> <url>` line per backend at startup.
 - **401 from the gateway** — wrong bearer. An HTML login page instead means
   Cloudflare Access is in front and its policy is not *Service Auth*.
-- **`denied` on `docker compose pull`** — the GHCR packages are private; log in
-  with a PAT that has `read:packages`.
+- **`network docker_global declared as external, but could not be found`** — the
+  shared network does not exist yet: `docker network create docker_global`.
+- **`denied` on `docker compose pull`** — the GHCR packages are public, so this
+  means the tag is wrong rather than that you need credentials.
