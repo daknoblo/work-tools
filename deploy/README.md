@@ -1,22 +1,34 @@
 # Deploying the stack
 
-Three containers on one compose network. Only the gateway is reachable from
-outside it, and it is the only thing a client ever configures.
+Three containers. Only the gateway is meant to be reached from outside, and it is
+the only thing a client ever configures.
 
 ```
-cloudflared ──▶ 127.0.0.1:8090 ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030
-                                                 └──▶ markitdown-mcp:3001
+cloudflared ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030   (docker_global)
+                              └──▶ markitdown-mcp:3001        (private)
 ```
 
-| Service | Published | Authentication |
+| Service | Networks | Authentication |
 | --- | --- | --- |
-| [mcp-gateway](../tools/mcp-gateway/README.md) | `127.0.0.1:8090` | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
-| [azure-diagram-builder](../tools/azure-diagram-builder/README.md) | no | `Bearer $DIAGRAMS_MCP_TOKEN`, gateway only |
-| [markitdown-mcp](../tools/markitdown-mcp/README.md) | no | none — see its README |
+| [mcp-gateway](../tools/mcp-gateway/README.md) | `docker_global` + private | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
+| [azure-diagram-builder](../tools/azure-diagram-builder/README.md) | `docker_global` | `Bearer $DIAGRAMS_MCP_TOKEN` |
+| [markitdown-mcp](../tools/markitdown-mcp/README.md) | private only | none — see below |
 
-The backends deliberately have no `ports:` entry. `markitdown-mcp` has no
-authentication of its own and converts `file://` URIs, so the compose network is
-the only thing keeping it private.
+`docker_global` is the pre-existing shared network and is declared `external`, so
+this stack expects it to be there rather than creating it.
+
+**`markitdown-mcp` is deliberately not on it.** It has no authentication of any
+kind, and its one tool fetches whatever `http(s)://` URL it is handed and returns
+the body. On a network shared with everything else, that turns it into an open
+request proxy for any container that can resolve its name — including toward
+services that have no authentication of their own. Its own bearer-less-ness is
+fine only because the sole thing that can reach it is the gateway, which does
+authenticate.
+
+The other two carry bearer tokens, so being on the shared network costs nothing:
+an unauthenticated caller there gets a `401`.
+
+No backend publishes a port.
 
 ## Install
 
@@ -61,10 +73,42 @@ follow. Without the slash the backend simply appears to speak no MCP.
 an upstream image whose write behaviour is not ours to assume; the other two are
 built in this repository, so their filesystem access is known.
 
-**No `ports:` on the backends.** `markitdown-mcp` has no authentication of its
-own and its one tool reads `file://` URIs and fetches arbitrary URLs. The compose
-network is what keeps it private, and the gateway's bearer token is the only
-thing deciding who may ask it for anything.
+**`markitdown-mcp` on its own network while everything else is on
+`docker_global`.** Reachability is the only access control that service has, so
+the gateway is the only thing given it. See the table at the top.
+
+## Exposing it
+
+The gateway sits on `docker_global`, so a reverse proxy or cloudflared already on
+that network reaches it at `http://mcp-gateway:8000` with nothing bound on the
+host. The `ports:` entry publishing `127.0.0.1:8090` is only there for a
+cloudflared that runs on the host instead; drop it if yours is containerised.
+
+```yaml
+ingress:
+  - hostname: tools.example.com
+    service: http://mcp-gateway:8000
+    originRequest:
+      connectTimeout: 30s
+      # MCP responses stream, so chunked encoding has to stay on.
+      disableChunkedEncoding: false
+  - service: http_status:404
+```
+
+Cloudflare returns **error 524** when an origin has not started responding within
+100 seconds, on every plan below Enterprise, and it cannot be raised. The diagram
+builder's tools are deterministic and answer in milliseconds; the only realistic
+candidate is `markitdown_convert_to_markdown` on a large PDF or an audio file.
+Once the server starts streaming the limit no longer applies — it bounds time to
+first byte, not total duration.
+
+Cloudflare Access adds a second, independent layer. It uses its own
+`CF-Access-Client-Id` and `CF-Access-Client-Secret` headers, so it does not
+collide with the gateway's `Authorization` header — provided you do **not**
+enable Access's single-header mode, which would consume `Authorization` itself.
+An Access policy protecting an MCP endpoint must use the **Service Auth** action;
+any other action redirects to an identity-provider login that an MCP client
+cannot complete. Avoid **Bypass**, which switches off logging entirely.
 
 ## Verify
 
@@ -84,30 +128,13 @@ MCP_BEARER=$MCP_GATEWAY_TOKEN scripts/mcp-smoke.sh \
   http://127.0.0.1:8090/mcp diagrams_list_services markitdown_convert_to_markdown
 ```
 
-Confirm nothing else is exposed:
+Confirm the unauthenticated backend is not reachable from the shared network:
 
 ```bash
-ss -ltnp | grep -E '8090|3030|3001'   # only 127.0.0.1:8090 should appear
+docker run --rm --network docker_global alpine \
+  sh -c 'apk add -q curl && curl -sS -o /dev/null -w "%{http_code}\n" --max-time 5 \
+         http://markitdown-mcp:3001/mcp/'   # expect a failure to connect, not a 200
 ```
-
-## Exposing it
-
-The gateway binds to loopback, so put your tunnel in front of it. With
-cloudflared, point one hostname at `http://127.0.0.1:8090`. If cloudflared runs
-in Docker, join it to the `work-tools_mcp` network and target
-`http://mcp-gateway:8000` instead — then nothing is bound on the host at all,
-and the `ports:` block can go.
-
-MCP calls are long-lived: allow at least a 300 s read timeout on any proxy in
-the path.
-
-Cloudflare Access adds a second, independent layer. It uses its own
-`CF-Access-Client-Id` and `CF-Access-Client-Secret` headers, so it does not
-collide with the gateway's `Authorization` header — provided you do **not**
-enable Access's single-header mode, which would consume `Authorization` itself.
-An Access policy protecting an MCP endpoint must use the **Service Auth** action;
-any other action redirects to an identity-provider login that an MCP client
-cannot complete.
 
 ## Update
 
