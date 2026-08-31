@@ -1,0 +1,14 @@
+diff --git a/mcp-server/Dockerfile b/mcp-server/Dockerfile
+index fb816a7..fe1b5a3 100644
+--- a/mcp-server/Dockerfile
++++ b/mcp-server/Dockerfile
+@@ -58,6 +58,9 @@ RUN npm ci --omit=dev && npm cache clean --force
+ # Compiled server + generated icon/pricing sidecars.
+ COPY --from=build /app/mcp-server/dist ./dist
+ 
++# MIT asks that the notice travel with copies of the software, and an image is one.
++COPY LICENSE NOTICE /licenses/
++
+ EXPOSE 3030
+ 
+ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

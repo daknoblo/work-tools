@@ -187,6 +187,11 @@ jobs:
           fi
           echo "image ships the vendored markitdown ${actual}"
 
+          # Upstream's wheels carry no licence file, so the image only has one because
+          # the Dockerfile copies it out of the mirror.
+          docker run --rm --entrypoint sh "${IMAGE_NAME}:smoke" -c 'test -s /licenses/LICENSE'
+          echo "upstream licence ships with the image"
+
       # Pushed by digest and left untagged; the merge job is what gives these a name.
       - name: Build and push by digest
         id: build

@@ -28,6 +28,10 @@ COPY packages/markitdown-mcp /src/markitdown-mcp
 RUN pip --no-cache-dir install "/src/markitdown[all]" /src/markitdown-mcp \
     && python -c "import markitdown, markitdown_mcp; print(markitdown.__version__)"
 
+# MIT asks that the notice travel with copies of the software, and an image is one.
+# Upstream's wheels carry no licence file, so it is copied from the mirrored tree.
+COPY LICENSE /licenses/
+
 # Plugins are third-party code executed in-process; nothing here installs any, and a
 # server reachable from the gateway should not start loading them if one appears.
 ENV MARKITDOWN_ENABLE_PLUGINS=False
