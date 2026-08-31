@@ -77,12 +77,16 @@ built in this repository, so their filesystem access is known.
 One hostname, pointed at the gateway. The backends never appear in any tunnel
 configuration — they are reached by service name from inside `docker_global`.
 
-If cloudflared runs as a container on `docker_global`:
+cloudflared runs as a binary on the host, so it reaches the gateway through the
+published loopback port. In `/etc/cloudflared/config.yml`:
 
 ```yaml
+tunnel: work-tools
+credentials-file: /root/.cloudflared/<tunnel-id>.json
+
 ingress:
   - hostname: tools.example.com
-    service: http://mcp-gateway:8000
+    service: http://127.0.0.1:8090
     originRequest:
       connectTimeout: 30s
       # MCP responses stream, so chunked encoding has to stay on.
@@ -90,8 +94,15 @@ ingress:
   - service: http_status:404
 ```
 
-That needs no published port at all, so the `ports:` entry can go. If cloudflared
-runs on the host instead, keep the entry and use `http://127.0.0.1:8090`.
+```bash
+cloudflared tunnel create work-tools
+cloudflared tunnel route dns work-tools tools.example.com
+systemctl restart cloudflared
+```
+
+That loopback port is the only reason the gateway has a `ports:` entry at all. A
+cloudflared container on `docker_global` would target `http://mcp-gateway:8000`
+instead, and the entry could go.
 
 Cloudflare returns **error 524** when an origin has not started responding within
 100 seconds, on every plan below Enterprise, and it cannot be raised. The diagram
