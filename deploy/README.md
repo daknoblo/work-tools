@@ -1,12 +1,13 @@
 # Deploying the stack
 
-Three containers, all on the shared `docker_global` network. Only the gateway is
+Four containers, all on the shared `docker_global` network. Only the gateway is
 meant to be reached from outside, and it is the only thing a client ever
 configures.
 
 ```
 cloudflared ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030
-                              └──▶ markitdown-mcp:3001
+                              ├──▶ markitdown-mcp:3001
+                              └──▶ azure-diagram-graphviz:3002
 ```
 
 | Service | Published | Authentication |
@@ -14,6 +15,7 @@ cloudflared ──▶ mcp-gateway ──┬──▶ azure-diagram-builder:3030
 | [mcp-gateway](../tools/mcp-gateway/README.md) | `127.0.0.1:8191` | `Authorization: Bearer $MCP_GATEWAY_TOKEN` |
 | [azure-diagram-builder](../tools/azure-diagram-builder/README.md) | no | `Bearer $DIAGRAMS_MCP_TOKEN` |
 | [markitdown-mcp](../tools/markitdown-mcp/README.md) | no | none |
+| [azure-diagram-graphviz](../tools/azure-diagram-graphviz/README.md) | no | none |
 
 `docker_global` is declared `external`, so this stack expects it to exist rather
 than creating it.
@@ -68,9 +70,9 @@ receives a literal placeholder and the gateway resolves it at startup.
 `/mcp/` and answers `/mcp` with a `307`, which the gateway's HTTP client does not
 follow. Without the slash the backend simply appears to speak no MCP.
 
-**`read_only` on two services but not on `azure-diagram-builder`.** That one is
-an upstream image whose write behaviour is not ours to assume; the other two are
-built in this repository, so their filesystem access is known.
+**`read_only` everywhere except `azure-diagram-builder`.** That one is an
+upstream image whose write behaviour is not ours to assume; the rest are built in
+this repository, so their filesystem access is known.
 
 ## Exposing it
 
@@ -139,13 +141,14 @@ handshake and asserts the tools are there:
 
 ```bash
 MCP_BEARER=$MCP_GATEWAY_TOKEN scripts/mcp-smoke.sh \
-  http://127.0.0.1:8191/mcp diagrams_list_services markitdown_convert_to_markdown
+  http://127.0.0.1:8191/mcp diagrams_list_services markitdown_convert_to_markdown \
+  graphviz_generate_diagram
 ```
 
 Confirm the backends are not published on the host:
 
 ```bash
-ss -ltnp | grep -E '3030|3001' || echo 'backends bind nothing on the host'
+ss -ltnp | grep -E '3030|3001|3002' || echo 'backends bind nothing on the host'
 ```
 
 ## Update
@@ -156,7 +159,7 @@ docker compose pull && docker compose up -d
 docker image prune -f
 ```
 
-All three services track `latest` with `pull_policy: always`. To pin one, replace
+All four services track `latest` with `pull_policy: always`. To pin one, replace
 its tag with a published version and repeat.
 
 ## Troubleshooting

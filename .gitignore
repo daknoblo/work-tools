@@ -1,4 +1,9 @@
 # Local runtime configuration - never commit
-.env
 *.env
+.env
 !.env.example
+
+# Python build and test artefacts
+__pycache__/
+*.py[cod]
+.venv/

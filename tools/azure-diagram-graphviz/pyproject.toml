@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=78.1.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "azure-diagram-mcp-server"
+version = "0.2.0"
+description = "MCP server that renders Microsoft Azure architecture diagrams with the Python diagrams package"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "diagrams>=0.24.4",
+    # SDK 2.x dropped mcp.server.fastmcp, which server.py depends on
+    "mcp[cli]>=1.11.0,<2",
+    "pydantic>=2.10.6",
+    "bandit>=1.7.5",
+    # Security-related minimums
+    "setuptools>=78.1.1",  # Fixes CVE-2025-47273
+    "starlette>=0.47.2",   # Fixes CVE-2025-54121
+    "urllib3>=2.5.0",      # Fixes CVE-2025-50181, CVE-2025-50182
+]
+
+[project.scripts]
+azure-diagram-mcp-server = "azure_diagram_mcp_server.server:main"
+
+[tool.setuptools]
+packages = ["azure_diagram_mcp_server"]

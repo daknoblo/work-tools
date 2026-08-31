@@ -9,6 +9,8 @@ services:
     depends_on:
       azure-diagram-builder:
         condition: service_healthy
+      azure-diagram-graphviz:
+        condition: service_healthy
       markitdown-mcp:
         condition: service_healthy
     environment:
@@ -23,6 +25,10 @@ services:
           },
           "markitdown": {
             "url": "http://markitdown-mcp:3001/mcp/",
+            "transport": "http"
+          },
+          "graphviz": {
+            "url": "http://azure-diagram-graphviz:3002/mcp",
             "transport": "http"
           }
         }
@@ -55,6 +61,21 @@ services:
   markitdown-mcp:
     image: ghcr.io/daknoblo/markitdown-mcp:latest
     container_name: markitdown-mcp
+    restart: unless-stopped
+    pull_policy: always
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - docker_global
+
+  azure-diagram-graphviz:
+    image: ghcr.io/daknoblo/azure-diagram-graphviz:latest
+    container_name: azure-diagram-graphviz
     restart: unless-stopped
     pull_policy: always
     read_only: true

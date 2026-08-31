@@ -18,6 +18,7 @@ client ──▶ mcp-gateway ──┬──▶ azure-diagram-builder
 | MCP gateway | `ghcr.io/daknoblo/mcp-gateway` | first-party | [docs](tools/mcp-gateway/README.md) |
 | Azure Diagram Builder | `ghcr.io/daknoblo/azure-diagram-builder` | [Arturo-Quiroga-MSFT/azure-architecture-diagram-builder](https://github.com/Arturo-Quiroga-MSFT/azure-architecture-diagram-builder) | [docs](tools/azure-diagram-builder/README.md) |
 | MarkItDown | `ghcr.io/daknoblo/markitdown-mcp` | [microsoft/markitdown](https://github.com/microsoft/markitdown) | [docs](tools/markitdown-mcp/README.md) |
+| Azure diagram renderer | `ghcr.io/daknoblo/azure-diagram-graphviz` | forked from [dminkovski/azure-diagram-mcp](https://github.com/dminkovski/azure-diagram-mcp), now first-party | [docs](tools/azure-diagram-graphviz/README.md) |
 
 Deployment for all three: [deploy/README.md](deploy/README.md).
 
