@@ -58,10 +58,10 @@ The tested Foundry resource belongs to the managed MCAP tenant and subscription:
 
 | Setting | Verified value |
 | --- | --- |
-| Account | `admin@MngEnvMCAP094150.onmicrosoft.com` |
-| Tenant | `a172a259-b1c7-4944-b2e1-6d551f954711` |
-| Subscription | `ARTURO-MngEnvMCAP094150` |
-| Subscription ID | `7a28b21e-0d3e-4435-a686-d92889d4ee96` |
+| Account | `admin@contoso.onmicrosoft.com` |
+| Tenant | `<your-tenant-id>` |
+| Subscription | `<your-subscription-name>` |
+| Subscription ID | `<your-subscription-id>` |
 | Resource group | `AQ-FOUNDRY-RG` |
 | Foundry resource | `r2d2-foundry-001` |
 | Resource type | `Microsoft.CognitiveServices/accounts` |
@@ -99,8 +99,8 @@ different location.
       ],
       "env": {
         "AZURE_TOKEN_CREDENTIALS": "AzureCliCredential",
-        "AZURE_TENANT_ID": "a172a259-b1c7-4944-b2e1-6d551f954711",
-        "AZURE_SUBSCRIPTION_ID": "7a28b21e-0d3e-4435-a686-d92889d4ee96"
+        "AZURE_TENANT_ID": "<your-tenant-id>",
+        "AZURE_SUBSCRIPTION_ID": "<your-subscription-id>"
       }
     }
   }
@@ -159,8 +159,8 @@ The tested Claude prompt was:
 ```text
 Using azure-foundry, list the Azure OpenAI model deployments in Foundry resource
 r2d2-foundry-001, resource group AQ-FOUNDRY-RG, subscription
-7a28b21e-0d3e-4435-a686-d92889d4ee96, tenant
-a172a259-b1c7-4944-b2e1-6d551f954711. Use credential authentication and make no
+<your-subscription-id>, tenant
+<your-tenant-id>. Use credential authentication and make no
 changes.
 ```
 

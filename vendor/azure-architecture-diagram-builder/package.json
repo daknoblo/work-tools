@@ -1,6 +1,6 @@
 {
   "name": "azure-architecture-diagram-builder",
-  "version": "1.10.1",
+  "version": "2.1.3",
   "description": "Azure architecture diagram builder with official icon library",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "check:lockfiles": "node scripts/public-npm-lockfiles.mjs",
     "dev:avatar": "concurrently --names \"token,vite\" --prefix-colors \"cyan,blue\" \"bash scripts/start-token-server.sh\" \"vite --port 3002 --strictPort\"",
     "demo:record": "node scripts/demo-recording.mjs",
     "pricing:refresh": "node scripts/refresh-pricing-data.mjs",
@@ -18,6 +19,7 @@
     "test:arm": "node scripts/test-arm-extractor.mjs",
     "test:dagre-migration": "tsx scripts/test-dagre-migration.ts",
     "test:layout-preservation": "tsx scripts/test-layout-preservation.ts",
+    "test:refinement-containment": "tsx scripts/test-refinement-group-containment.ts",
     "test:grouped-layout": "tsx scripts/test-grouped-layout.ts",
     "test:edge-label-layout": "tsx scripts/test-edge-label-layout.ts",
     "test:validation-freshness": "tsx scripts/test-validation-freshness.ts",
@@ -29,13 +31,16 @@
     "test:correlation": "node scripts/test-correlation-contract.mjs",
     "test:refinement-guard": "tsx scripts/test-refinement-guard.ts",
     "test:follow-up-model": "tsx scripts/test-follow-up-model-policy.ts",
+    "test:anthropic-format": "tsx scripts/test-anthropic-format.ts",
+    "test:azure-signin-errors": "tsx scripts/test-azure-signin-errors.ts",
     "test:semantic-relationships": "tsx scripts/test-semantic-relationships.ts",
+    "test:private-connectivity": "tsx scripts/test-private-connectivity.ts",
     "test:deterministic": "node scripts/run-deterministic-tests.mjs",
     "test:bundle-budget": "node scripts/test-bundle-budget.mjs",
     "test:version": "node scripts/test-version-contract.mjs",
     "test:smoke": "node scripts/run-release-smoke.mjs",
     "measure:performance": "node scripts/measure-web-performance.mjs",
-    "verify:release": "npm run typecheck && npm run lint && npm run build && npm run test:bundle-budget && npm run test:deterministic && npm run test:version && npm run test:smoke",
+    "verify:release": "npm run check:lockfiles && npm run typecheck && npm run lint && npm run build && npm run test:bundle-budget && npm run test:deterministic && npm run test:version && npm run test:smoke",
     "eval:aadb:build": "node scripts/evaluations/build-aadb-seed.mjs",
     "eval:aadb:deterministic": "node scripts/evaluations/run-aadb-deterministic.mjs",
     "eval:aadb:verify": "node scripts/evaluations/test-aadb-baseline.mjs",
@@ -74,16 +79,20 @@
     "@types/dom-to-image": "^2.6.7",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
-    "@typescript-eslint/eslint-plugin": "^6.14.0",
-    "@typescript-eslint/parser": "^6.14.0",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^9.2.1",
-    "eslint": "^8.55.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^8.57.1",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "playwright": "^1.58.2",
     "tsx": "^4.23.1",
-    "typescript": "5.3.3",
-    "vite": "^5.0.8"
+    "typescript": "5.9.3",
+    "vite": "^8.3.0"
+  },
+  "overrides": {
+    "image-size": "^2.0.4"
   }
 }
